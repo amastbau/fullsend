@@ -302,7 +302,7 @@ The existing design principle is that [the repo is the coordinator](problems/age
   existing entity activity or explicit receipts — distinguishes handled work
   ([ADR 0098](ADRs/0098-entity-first-harness-evaluation.md), partially
   superseding [ADR 0063](ADRs/0063-polling-based-work-discovery.md)).
-- GitLab dispatch uses cron-polled scheduled pipelines for issue/comment/label events, MR-open review, and MR-merge retro. Native `merge_request_event` no-ops review (protected variables are unavailable on MR refs). No webhook bridge required (see [ADR 0067](ADRs/0067-gitlab-cron-polling-event-dispatch.md)).
+- GitLab dispatch uses cron-polled scheduled pipelines for issue/comment/label events, MR-open review, and MR-merge retro. Native `merge_request_event` no-ops review (protected variables are unavailable on MR refs). No webhook bridge required (see [ADR 0067](ADRs/0067-gitlab-cron-polling-event-dispatch.md)). Dispatch HMAC signing (`FULLSEND_DISPATCH_HMAC`) is GitLab-specific: GitHub native events and the same-run `workflow_call` matrix handoff have no equivalent of GitLab's API-triggered pipeline variable injection ([security threat model](problems/security-threat-model.md#forged-ci-dispatch-payloads)).
 - Conversation participation: GitHub Discussions (and future chat systems) enter
   dispatch as resolved entities with `entity.kind: conversation`; when a
   prompting event is available, it expresses threading on
