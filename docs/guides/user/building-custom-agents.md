@@ -493,10 +493,11 @@ jobs:
         run: |
           set -euo pipefail
           SRC=".defaults/internal/scaffold/fullsend-repo"
-          # Agent files (harness, agents, policies, etc.) are now resolved
-          # from the fullsend-ai/agents repo at runtime by `fullsend run`.
-          # Only infrastructure scripts remain in the scaffold.
-          LAYERED_DIRS="scripts"
+          # Layer the scaffold's default policies and provider profiles so a
+          # harness that references policies/base.yaml (Step 3) or the
+          # providers configured in Step 2 resolves them without vendoring
+          # copies into this repository.
+          LAYERED_DIRS="policies providers scripts"
           for dir in ${LAYERED_DIRS}; do
             if [[ -d "${SRC}/${dir}" ]]; then
               mkdir -p ".fullsend/${dir}"
