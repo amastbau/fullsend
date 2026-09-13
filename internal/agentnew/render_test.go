@@ -1,7 +1,6 @@
 package agentnew
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -106,24 +105,29 @@ func TestGeneratedHarnessHasNoDeprecatedShapes(t *testing.T) {
 	}
 }
 
-// TestSharedPolicyMatchesScaffold is the #6834 contract: agent new writes
-// the same policies/base.yaml CI layers from the embedded scaffold, so a
-// generated agent and a sandbox run after github setup see one policy.
-func TestSharedPolicyMatchesScaffold(t *testing.T) {
-	want, err := scaffold.FullsendRepoFile("policies/base.yaml")
-	if err != nil {
-		t.Fatalf("scaffold policies/base.yaml: %v", err)
+// TestSharedPolicyIsTheOnlyPolicy is the #6834 contract: the scaffold ships
+// no policies/ directory and CI layers none, so the policies/base.yaml this
+// command writes is the one every run of a repo-local agent uses. It must
+// therefore be a shared asset and carry the sandbox identity OpenShell
+// 0.0.116+ refuses to run without ("OCI USER is required because
+// run_as_user is omitted").
+func TestSharedPolicyIsTheOnlyPolicy(t *testing.T) {
+	if _, err := scaffold.FullsendRepoFile("policies/base.yaml"); err == nil {
+		t.Fatal("scaffold ships policies/base.yaml; agent new must not become a second copy (#7268)")
 	}
 	files, err := Render(testOptions("lint-docs", "triage"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := fileByPath(t, files, "policies/base.yaml")
-	if !bytes.Equal(got.Data, want) {
-		t.Fatalf("generated policies/base.yaml differs from the scaffold copy")
-	}
 	if !got.Shared {
 		t.Error("policies/base.yaml must be a shared asset")
+	}
+	policy := string(got.Data)
+	for _, want := range []string{"version: 1", "filesystem_policy:", "landlock:", "process:", "run_as_user: sandbox", "run_as_group: sandbox"} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("generated policies/base.yaml lacks %q", want)
+		}
 	}
 }
 

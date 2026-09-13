@@ -110,10 +110,6 @@ func TestWalkLayeredContent_ExcludesTestFiles(t *testing.T) {
 	}))
 	assert.Contains(t, paths, "scripts/pre-fetch-prior-review.sh")
 	assert.Contains(t, paths, "scripts/reconcile-repos.sh")
-	// #6834: workspace prep copies policies/ only when the directory exists
-	// in the scaffold. Without base.yaml the [[ -d ]] guard skips it and
-	// sandbox harnesses fail ValidateFilesExist.
-	assert.Contains(t, paths, "policies/base.yaml")
 	for _, p := range paths {
 		assert.False(t, isLayeredRepoTestFile(p), "test file shipped in layered content: %s", p)
 	}

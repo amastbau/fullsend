@@ -815,7 +815,11 @@ func (h *Harness) ValidateFilesExist() error {
 		return err
 	}
 	if err := check("policy", h.Policy); err != nil {
-		return err
+		// The per-repo scaffold ships no sandbox policy and CI layers none,
+		// so a relative policy: path only resolves if the file is committed
+		// next to the harness (#6834). Say how to get one rather than
+		// leaving a bare stat error to reverse-engineer.
+		return fmt.Errorf("%w (the policy must be committed alongside the harness: `fullsend agent new` writes policies/base.yaml when it is absent, or point policy: at the fleet copy by URL)", err)
 	}
 	if err := check("pre_script", h.PreScript); err != nil {
 		return err

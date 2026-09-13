@@ -221,7 +221,7 @@ process:
   run_as_group: sandbox
 ```
 
-Most custom agents can reuse the scaffold's `policies/base.yaml` instead of creating their own. Override only when your agent has specific filesystem or process requirements.
+Most custom agents can reuse the `policies/base.yaml` that [`fullsend agent new`](../../cli/agent.md#agent-new) writes (the same policy the fleet agents run under) instead of creating their own. Override only when your agent has specific filesystem or process requirements. Either way the policy is committed with the harness — CI does not supply one.
 
 ### Network access via providers (recommended)
 
@@ -493,11 +493,11 @@ jobs:
         run: |
           set -euo pipefail
           SRC=".defaults/internal/scaffold/fullsend-repo"
-          # Layer the scaffold's default policies and provider profiles so a
-          # harness that references policies/base.yaml (Step 3) or the
-          # providers configured in Step 2 resolves them without vendoring
-          # copies into this repository.
-          LAYERED_DIRS="policies providers scripts"
+          # Layer the scaffold's provider definitions so the providers
+          # configured in Step 2 resolve without vendoring copies into this
+          # repository. The policy (Step 3) and profiles are committed with
+          # the harness; the scaffold ships neither.
+          LAYERED_DIRS="providers scripts"
           for dir in ${LAYERED_DIRS}; do
             if [[ -d "${SRC}/${dir}" ]]; then
               mkdir -p ".fullsend/${dir}"

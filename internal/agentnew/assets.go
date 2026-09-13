@@ -13,19 +13,21 @@ import (
 // These are written only when absent and are never overwritten, because they
 // are shared by every agent in the directory. They are needed at all because
 // a per-repo install vendors none of them: CollectPerRepoInstallFiles returns
-// only the shim workflow and one thin caller. CI layers policies/ and
-// providers/ from this scaffold at run time; profiles/ is not in LAYERED_DIRS
-// (see TestLayeredDirsMatchWorkspacePreparation).
+// only the shim workflow and one thin caller, and CI's workspace layering
+// covers providers/ only — policies/ and profiles/ are not in LAYERED_DIRS
+// (see TestLayeredDirsMatchWorkspacePreparation), so the copies this command
+// writes are the ones every run uses. The policy has no scaffold copy at
+// all: fleet agents resolve theirs from fullsend-ai/agents by URL, and the
+// template here is the seed for repo-local agents (#6834, #7268).
 //
-// The bytes come from the existing scaffold embed wherever possible, so a
-// generated tree is byte-identical to what CI layers in and to what the
-// fleet runs.
+// Providers and profiles come from the existing scaffold embed, so a
+// generated tree is byte-identical to what CI layers in for providers/.
 func sharedAssets(role Role, validationLoop bool) ([]File, error) {
 	files := []File{}
 
-	policy, err := scaffold.FullsendRepoFile("policies/base.yaml")
+	policy, err := templates.ReadFile("templates/policies/base.yaml")
 	if err != nil {
-		return nil, fmt.Errorf("reading base policy from the embedded scaffold: %w", err)
+		return nil, fmt.Errorf("reading base policy: %w", err)
 	}
 	files = append(files, File{Path: "policies/base.yaml", Data: policy, Mode: 0o644, Shared: true})
 

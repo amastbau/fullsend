@@ -76,7 +76,7 @@ Building and deploying a custom agent takes four steps:
 ## Before you begin
 
 - **fullsend CLI** installed and available on your PATH.
-- **Repository scaffolded.** Run [`fullsend github setup`](../getting-started/configuring-github.md) first — it creates `.fullsend/config.yaml` and the dispatch workflow. Note that a per-repo install does **not** vendor `policies/`, `providers/` or `profiles/` into the repository; [`fullsend agent new`](#step-0-generate-the-skeleton) writes the ones a local `fullsend run` needs, and CI layers `policies/` and `providers/` from the scaffold at run time. If you are writing a harness by hand, create them yourself (see [Minimum viable agent](#minimum-viable-agent)).
+- **Repository scaffolded.** Run [`fullsend github setup`](../getting-started/configuring-github.md) first — it creates `.fullsend/config.yaml` and the dispatch workflow. Note that a per-repo install does **not** vendor `policies/`, `providers/` or `profiles/` into the repository; [`fullsend agent new`](#step-0-generate-the-skeleton) writes the ones your agent needs, and you commit them. CI layers only `providers/` from the scaffold at run time — it never supplies a policy or a profile. If you are writing a harness by hand, create `policies/` and `profiles/` yourself or reference the fleet copies by URL (see [Minimum viable agent](#minimum-viable-agent)).
 - **GCP inference provisioned (CI only).** For agents running in GitHub Actions, run [`fullsend inference provision`](../../cli/inference.md) to set up Workload Identity Federation.
 - **GitHub Apps installed (CI only).** Your org needs the fullsend GitHub Apps — see [Configuring GitHub](../getting-started/configuring-github.md).
 
@@ -120,15 +120,15 @@ For local development and debugging, you can also run an agent directly with `fu
 
 ## Minimum viable agent
 
-You need a harness, an agent definition, and supporting scaffold files. [`fullsend agent new`](#step-0-generate-the-skeleton) writes all of them for you; the layout below is what it produces, and what you need to create by hand if you are building a harness from scratch. A per-repo install does not vendor `policies/`, `providers/` or `profiles/`. CI layers `policies/` and `providers/` from the scaffold at run time; a hand-written agent still needs local copies for `fullsend run`:
+You need a harness, an agent definition, and supporting scaffold files. [`fullsend agent new`](#step-0-generate-the-skeleton) writes all of them for you; the layout below is what it produces, and what you need to create by hand if you are building a harness from scratch. A per-repo install does not vendor `policies/`, `providers/` or `profiles/`. CI layers only `providers/` from the scaffold at run time; the policy and profiles are committed with the harness, so a hand-written agent must supply them (and needs a local `providers/` copy for `fullsend run`):
 
 ```
 .fullsend/
 +-- harness/my-agent.yaml                  # Execution config (you create)
 +-- agents/my-agent.md                     # Agent prompt (you create)
 +-- providers/vertex-ai.yaml               # Provider definition (from scaffold)
-+-- profiles/fullsend-vertex-ai.yaml       # Profile definition (from scaffold)
-+-- policies/base.yaml                     # Sandbox policy (from scaffold)
++-- profiles/fullsend-vertex-ai.yaml       # Profile definition (fleet copy)
++-- policies/base.yaml                     # Sandbox policy (agent new, or fleet copy)
 ```
 
 **`harness/my-agent.yaml`:**
@@ -165,7 +165,7 @@ credentials:
   _NOOP_VERTEX_AI: ""
 ```
 
-**`profiles/fullsend-vertex-ai.yaml`** — profile definition (tells OpenShell what endpoints the `fullsend-vertex-ai` type grants access to). Copy this from the scaffold or [fullsend-ai/agents](https://github.com/fullsend-ai/agents):
+**`profiles/fullsend-vertex-ai.yaml`** — profile definition (tells OpenShell what endpoints the `fullsend-vertex-ai` type grants access to). Copy this from [fullsend-ai/agents](https://github.com/fullsend-ai/agents), the fleet copy the sandbox actually enforces, or let `agent new` write it:
 ```yaml
 id: fullsend-vertex-ai
 display_name: Fullsend Vertex AI
