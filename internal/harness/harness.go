@@ -823,13 +823,14 @@ func (h *Harness) ValidateFilesExist() error {
 		// `agent new` only writes policies/base.yaml as a side effect of
 		// generating a brand-new agent: Generate() collision-checks every
 		// owned file (harness/agents/schema/post-script) before writing
-		// anything, so re-running it against an EXISTING agent name fails on
-		// that collision (or, with --force, rewrites the owned files) and
-		// never reaches the missing shared policy. Do not suggest re-running
-		// agent new as the fix here; the two things that actually work for
-		// an existing harness are committing a policy file next to it or
-		// pointing policy: at the fleet copy by URL.
-		return fmt.Errorf("%w (commit a policy file next to the harness, or point policy: at the fleet copy in fullsend-ai/agents by URL; `fullsend agent new` only writes one as part of generating a brand-new agent)", err)
+		// anything, so re-running it against an EXISTING agent name refuses
+		// — on the config registration check if the name is registered, or
+		// on the owned-file collision otherwise (agent_new.go / generate.go)
+		// — and never reaches the missing shared policy. Do not suggest
+		// re-running agent new as the fix here; the two things that
+		// actually work for an existing harness are committing a copy of
+		// the fleet policy or pointing policy: at its URL.
+		return fmt.Errorf("%w (commit a copy of the fleet policy in fullsend-ai/agents next to the harness, or point policy: at its URL; `fullsend agent new` only writes one as part of generating a brand-new agent)", err)
 	}
 	if err := check("pre_script", h.PreScript); err != nil {
 		return err
