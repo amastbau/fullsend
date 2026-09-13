@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -237,13 +238,7 @@ func TestAgentNewCodexOmitsVertexHostFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generated harness does not load: %v", err)
 	}
-	var hasOpenAI bool
-	for _, p := range h.Providers {
-		if p == agentnew.OpenAIProviderName {
-			hasOpenAI = true
-		}
-	}
-	if !hasOpenAI {
+	if !slices.Contains(h.Providers, agentnew.OpenAIProviderName) {
 		t.Errorf("providers = %v, want to include openai", h.Providers)
 	}
 	for _, hf := range h.HostFiles {

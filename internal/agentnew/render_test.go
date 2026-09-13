@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -279,7 +280,7 @@ func TestCodexHarnessOmitsVertexCredentials(t *testing.T) {
 	if _, err := harness.CheckGenerated(h, dir); err != nil {
 		t.Fatalf("generated codex tree does not validate: %v", err)
 	}
-	if !containsString(h.Providers, OpenAIProviderName) {
+	if !slices.Contains(h.Providers, OpenAIProviderName) {
 		t.Errorf("providers = %v, want to include %q", h.Providers, OpenAIProviderName)
 	}
 	for _, hf := range h.HostFiles {
@@ -322,15 +323,6 @@ func TestDefaultHarnessDeclaresOpenAIAndVertex(t *testing.T) {
 			t.Errorf("default harness should contain %q:\n%s", want, yaml)
 		}
 	}
-}
-
-func containsString(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestPiHarnessKeepsVertexCredentials(t *testing.T) {
