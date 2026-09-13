@@ -503,7 +503,7 @@ infrastructure, coordinate between roles:
 | Step | Role | Command |
 |------|------|---------|
 | 1 | Platform Admin | `fullsend repos uninstall "org/*" --yes` (forge-side cleanup + manifest removal) |
-| 2 | GCP Admin (Inference) | `fullsend inference deprovision <org>` (WIF cleanup) |
+| 2 | GCP Admin (Inference) | GitHub: `fullsend inference deprovision <org>` (WIF cleanup). GitLab: `inference deprovision` does not cover the shared `gitlab-oidc` provider — see [Operations § Per-repo teardown](operations.md#per-repo-teardown) step 6 to revoke each repo's WIF trust instead. |
 | 3 | GCP Admin (Mint) | `fullsend mint unenroll <org>` (self-hosted mints only; not needed for the hosted community mint) |
 
 Each `fullsend` command that prompts for confirmation accepts a skip
