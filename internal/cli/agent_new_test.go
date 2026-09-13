@@ -209,6 +209,25 @@ func TestAgentNewWithRuntime(t *testing.T) {
 	}
 }
 
+// TestAgentNewNoRegisterWithRuntimeHintsAgentSet: --no-register combined
+// with a non-empty --runtime leaves the runtime recorded nowhere (it only
+// shapes the generated harness), and `agent add` — the command the plain
+// --no-register hint names — has no --runtime flag to restore it. The hint
+// must instead (or additionally) name `agent set --runtime`, which does.
+func TestAgentNewNoRegisterWithRuntimeHintsAgentSet(t *testing.T) {
+	dir := newFullsendDir(t)
+	f := defaultFlags(dir, "runtime")
+	f.runtime = "pi"
+	f.noRegister = true
+	out, err := runNew(t, "lint-docs", f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "fullsend agent set lint-docs --runtime pi") {
+		t.Errorf("--no-register with --runtime should hint `agent set --runtime`, so the runtime can still be recorded:\n%s", out)
+	}
+}
+
 func TestAgentNewCodexRequiresOpenAIModel(t *testing.T) {
 	dir := newFullsendDir(t)
 	f := defaultFlags(dir, "runtime")

@@ -94,8 +94,14 @@ func (o *Options) Validate() error {
 // usesVertex reports whether the generated harness should carry the GCP
 // credential host_files and the Vertex sandbox env. fullsend pins codex to
 // OpenAI, so those fields would only fail the run before it starts (#7264).
-// claude and pi both call Vertex; an empty runtime inherits the claude
-// default.
+// pi is multi-provider, so its answer also depends on the model: --runtime
+// pi with an OpenAI model calls OpenAI, not Vertex, and would otherwise be
+// stranded needing GOOGLE_APPLICATION_CREDENTIALS it will never use for the
+// same reason as #7264. agentruntime.NeedsOpenAIProvider is the single
+// resolution buildPiRunCommand itself gates on, reused here rather than
+// duplicating it. claude and the empty default always call Vertex; Options
+// carries only one Model, used as both the run model and the agent
+// definition's frontmatter model, so it is passed as both.
 func (o Options) usesVertex() bool {
-	return o.Runtime != "codex"
+	return !agentruntime.NeedsOpenAIProvider(o.Runtime, o.Model, o.Model, nil)
 }

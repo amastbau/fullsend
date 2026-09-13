@@ -91,6 +91,19 @@ func TestUsesVertex(t *testing.T) {
 	}
 }
 
+// TestUsesVertexPiKeysOnModelToo: --runtime pi with an OpenAI model calls
+// OpenAI, not Vertex, so it must not carry the GOOGLE_APPLICATION_CREDENTIALS
+// host_files and Vertex sandbox env either — the same failure shape as
+// #7264, for pi instead of codex.
+func TestUsesVertexPiKeysOnModelToo(t *testing.T) {
+	if got := (Options{Runtime: "pi", Model: "openai/gpt-6-astra"}).usesVertex(); got != false {
+		t.Errorf("usesVertex(pi, openai model) = %v, want false", got)
+	}
+	if got := (Options{Runtime: "pi", Model: "claude-opus-4-8"}).usesVertex(); got != true {
+		t.Errorf("usesVertex(pi, vertex model) = %v, want true", got)
+	}
+}
+
 func TestTriggerlessAgentIsRefusedLoudly(t *testing.T) {
 	o := validOptions()
 	o.Trigger = ""

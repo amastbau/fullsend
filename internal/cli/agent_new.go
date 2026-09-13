@@ -286,6 +286,14 @@ func runAgentNew(ctx context.Context, name string, f agentNewFlags, printer *ui.
 	if f.noRegister {
 		printer.StepInfo("Not registered (--no-register). Register it later with:")
 		printer.Raw(fmt.Sprintf("  fullsend agent add %s --fullsend-dir %s\n", result.HarnessPath, f.fullsendDir))
+		// `agent add` has no --runtime flag, so a non-empty runtime named
+		// here would otherwise be unrecoverable: the harness is already
+		// shaped by it (Vertex vs OpenAI host_files/env), but nothing
+		// records it, and dispatch falls back to the claude default until
+		// `agent set` names it explicitly.
+		if runtimeName != "" {
+			printer.Raw(fmt.Sprintf("  fullsend agent set %s --runtime %s --fullsend-dir %s\n", opts.Name, runtimeName, f.fullsendDir))
+		}
 	} else {
 		if err := runAgentAdd(ctx, result.HarnessPath, opts.Name, f.fullsendDir, nil, printer); err != nil {
 			return fmt.Errorf("agent files were written but registration failed: %w", err)
