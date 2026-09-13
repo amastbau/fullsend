@@ -90,12 +90,22 @@ it ships with marked sections to fill in. Everything else is complete.
 | `config.yaml` `agents:` entry | unless `--no-register` | n/a |
 
 The policy, provider and profile files are shared by every agent in the
-directory, so they are never overwritten — including with `--force`.
-`fullsend github setup` does not copy these into your repository, which is why
-`agent new` writes them when they are absent. CI still layers
-`policies/base.yaml` and `providers/` from the scaffold at run time, so a
-harness that references `policy: policies/base.yaml` does not fail file
-validation in Actions just because the file was never committed.
+directory, so `agent new` itself never overwrites them locally — including
+with `--force`. `fullsend github setup` does not copy these into your
+repository, which is why `agent new` writes them when they are absent.
+
+In CI, `policies/base.yaml` and `providers/` are upstream-owned, not
+repo-owned: workspace preparation copies the scaffold's default copies over
+whatever already exists at the same path — `.fullsend/policies/` and
+`.fullsend/providers/` for a per-repo install, or the config repo's root
+`policies/` and `providers/` for a per-org install — on every run. This is
+why a harness that references `policy: policies/base.yaml` does not fail
+file validation in Actions just because the file was never committed, but it
+also means a hand-edited `policies/base.yaml` does not survive the next run.
+To customize the policy, add a differently named file (e.g.
+`policies/my-policy.yaml`) and point your harness's `policy:` field at it —
+layering only overwrites paths that match a scaffold file name exactly.
+`profiles/` is not layered, so files there are never touched by CI.
 
 ### Flags
 
