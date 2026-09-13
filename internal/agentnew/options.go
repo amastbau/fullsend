@@ -5,6 +5,7 @@ import (
 
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/harness"
+	agentruntime "github.com/fullsend-ai/fullsend/internal/runtime"
 )
 
 // Default values for the generated harness.
@@ -33,6 +34,12 @@ type Options struct {
 	Image          string
 	TimeoutMinutes int
 	ValidationLoop bool
+	// Runtime is the already-validated --runtime value (claude, pi, or
+	// codex). Empty means the harness inherits the repo default, which is
+	// claude. It is not written into the harness YAML — config.yaml holds
+	// it — but it decides Vertex host_files/env and whether model: must be
+	// an OpenAI id (#7264).
+	Runtime string
 }
 
 // Validate checks every field that reaches a generated file, and does so
@@ -61,6 +68,14 @@ func (o *Options) Validate() error {
 	if o.Model != "" && !config.ValidModelRef(o.Model) {
 		return fmt.Errorf("model %q contains invalid characters", o.Model)
 	}
+	// fullsend pins codex to OpenAI; the default opus alias is one of the
+	// values it rejects. Fail here so generation cannot emit a harness the
+	// runtime will refuse.
+	if o.Runtime == "codex" {
+		if err := agentruntime.ValidateCodexModel(o.Model); err != nil {
+			return err
+		}
+	}
 	if o.Effort != "" && !config.ValidEffort(o.Effort) {
 		return fmt.Errorf("effort %q is not valid (allowed: %v)", o.Effort, config.ValidEffortLevels())
 	}
@@ -74,4 +89,13 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("image must not be empty")
 	}
 	return nil
+}
+
+// usesVertex reports whether the generated harness should carry the GCP
+// credential host_files and the Vertex sandbox env. fullsend pins codex to
+// OpenAI, so those fields would only fail the run before it starts (#7264).
+// claude and pi both call Vertex; an empty runtime inherits the claude
+// default.
+func (o Options) usesVertex() bool {
+	return o.Runtime != "codex"
 }

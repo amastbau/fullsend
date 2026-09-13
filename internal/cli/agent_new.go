@@ -82,9 +82,9 @@ Examples:
 	cmd.Flags().StringVar(&f.description, "description", "", "one-line description of what the agent does")
 	cmd.Flags().StringVar(&f.on, "on", "", "trigger preset: "+strings.Join(agentnew.PresetNames(), ", ")+" (default command:/fs-<name>)")
 	cmd.Flags().StringVar(&f.trigger, "trigger", "", "raw CEL trigger expression; mutually exclusive with --on")
-	cmd.Flags().StringVar(&f.model, "model", agentnew.DefaultModel, "model for the agent")
+	cmd.Flags().StringVar(&f.model, "model", agentnew.DefaultModel, "model for the agent (default opus; --runtime codex requires an OpenAI id)")
 	cmd.Flags().StringVar(&f.effort, "effort", agentnew.DefaultEffort, "effort level (low, medium, high, xhigh, max)")
-	cmd.Flags().StringVar(&f.runtime, "runtime", "", "agent runtime recorded in config.yaml (claude, pi or codex)")
+	cmd.Flags().StringVar(&f.runtime, "runtime", "", "agent runtime recorded in config.yaml (claude, pi or codex); also shapes the generated harness (Vertex credentials for claude/pi; OpenAI --model required for codex)")
 	cmd.Flags().StringVar(&f.slug, "slug", "", "harness slug (default: <owner>-<name> from the origin remote)")
 	cmd.Flags().StringVar(&f.image, "image", "", "sandbox image (default: the fleet's pin for this role)")
 	cmd.Flags().IntVar(&f.timeoutMinutes, "timeout-minutes", agentnew.DefaultTimeoutMinutes, "agent timeout in minutes")
@@ -110,6 +110,7 @@ func resolveAgentNewOptions(name string, f agentNewFlags) (opts agentnew.Options
 	runtimeName = f.runtime
 	on, trigger := f.on, f.trigger
 	slug, image, description := f.slug, f.image, f.description
+	modelFromSpec := false
 
 	if f.specFile != "" {
 		if name != "" {
@@ -126,6 +127,7 @@ func resolveAgentNewOptions(name string, f agentNewFlags) (opts agentnew.Options
 		}
 		if !f.changed("model") && spec.Model != "" {
 			opts.Model = spec.Model
+			modelFromSpec = true
 		}
 		if !f.changed("effort") && spec.Effort != "" {
 			opts.Effort = spec.Effort
@@ -211,6 +213,13 @@ func resolveAgentNewOptions(name string, f agentNewFlags) (opts agentnew.Options
 	if runtimeName != "" && !slices.Contains(userFacingRuntimes(), runtimeName) {
 		return opts, "", "", fmt.Errorf("runtime %q is not valid (allowed: %s)",
 			runtimeName, strings.Join(userFacingRuntimes(), ", "))
+	}
+	opts.Runtime = runtimeName
+	// The cobra default for --model is opus, a Claude alias. --runtime
+	// codex without an explicit --model (or spec model) must not silently
+	// write that alias into the harness.
+	if runtimeName == "codex" && !f.changed("model") && !modelFromSpec {
+		opts.Model = ""
 	}
 
 	if validateErr := opts.Validate(); validateErr != nil {
@@ -302,12 +311,20 @@ func printNextSteps(opts agentnew.Options, f agentNewFlags, printer *ui.Printer)
 	printer.Raw(fmt.Sprintf("  1. Fill in the marked sections of agents/%s.md — that file is the agent's prompt.\n", opts.Name))
 	printer.Raw(fmt.Sprintf("  2. Test locally:\n       fullsend run %s --fullsend-dir %s \\\n         --target-repo . --env-file .env.local\n",
 		opts.Name, f.fullsendDir))
-	printer.Raw("     .env.local needs GITHUB_ISSUE_URL, GH_TOKEN, ANTHROPIC_VERTEX_PROJECT_ID,\n")
-	printer.Raw("     CLOUD_ML_REGION, and GOOGLE_APPLICATION_CREDENTIALS pointing at a GCP\n")
-	printer.Raw("     credentials file — the harness copies that file into the sandbox, so the\n")
-	printer.Raw("     run stops before it starts without it. GH_TOKEN must be a real token: a\n")
-	printer.Raw("     connectivity check runs before the agent does. See\n")
-	printer.Raw("     docs/guides/user/running-agents-locally.md.\n")
+	if opts.Runtime == "codex" {
+		printer.Raw("     .env.local needs GITHUB_ISSUE_URL, GH_TOKEN, and OPENAI_API_KEY.\n")
+		printer.Raw("     The harness declares the openai provider; the runner keeps the key\n")
+		printer.Raw("     out of the sandbox. GH_TOKEN must be a real token: a connectivity\n")
+		printer.Raw("     check runs before the agent does. See\n")
+		printer.Raw("     docs/guides/user/running-agents-locally.md.\n")
+	} else {
+		printer.Raw("     .env.local needs GITHUB_ISSUE_URL, GH_TOKEN, ANTHROPIC_VERTEX_PROJECT_ID,\n")
+		printer.Raw("     CLOUD_ML_REGION, and GOOGLE_APPLICATION_CREDENTIALS pointing at a GCP\n")
+		printer.Raw("     credentials file — the harness copies that file into the sandbox, so the\n")
+		printer.Raw("     run stops before it starts without it. GH_TOKEN must be a real token: a\n")
+		printer.Raw("     connectivity check runs before the agent does. See\n")
+		printer.Raw("     docs/guides/user/running-agents-locally.md.\n")
+	}
 	if cmd := slashCommandFromTrigger(opts.Trigger); cmd != "" {
 		printer.Raw(fmt.Sprintf("  3. Commit %s, then comment `%s` on an issue or pull request to run it in CI.\n",
 			filepath.Clean(f.fullsendDir), cmd))

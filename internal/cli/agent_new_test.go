@@ -208,6 +208,69 @@ func TestAgentNewWithRuntime(t *testing.T) {
 	}
 }
 
+func TestAgentNewCodexRequiresOpenAIModel(t *testing.T) {
+	dir := newFullsendDir(t)
+	f := defaultFlags(dir, "runtime")
+	f.runtime = "codex"
+	_, err := runNew(t, "lint-docs", f)
+	if err == nil {
+		t.Fatal("--runtime codex without --model should be refused")
+	}
+	for _, want := range []string{"codex takes OpenAI model ids only", "FULLSEND_CODEX_MODEL"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q, got: %v", want, err)
+		}
+	}
+}
+
+func TestAgentNewCodexOmitsVertexHostFiles(t *testing.T) {
+	dir := newFullsendDir(t)
+	f := defaultFlags(dir, "runtime", "model")
+	f.runtime = "codex"
+	f.model = "openai/gpt-5.6-luna"
+	out, err := runNew(t, "lint-docs", f)
+	if err != nil {
+		t.Fatalf("runAgentNew: %v\n%s", err, out)
+	}
+
+	h, err := harness.Load(filepath.Join(dir, "harness", "lint-docs.yaml"))
+	if err != nil {
+		t.Fatalf("generated harness does not load: %v", err)
+	}
+	var hasOpenAI bool
+	for _, p := range h.Providers {
+		if p == agentnew.OpenAIProviderName {
+			hasOpenAI = true
+		}
+	}
+	if !hasOpenAI {
+		t.Errorf("providers = %v, want to include openai", h.Providers)
+	}
+	for _, hf := range h.HostFiles {
+		if strings.Contains(hf.Src, "GOOGLE_APPLICATION_CREDENTIALS") {
+			t.Errorf("codex harness must not require GCP credentials: %+v", hf)
+		}
+	}
+	if strings.Contains(out, "GOOGLE_APPLICATION_CREDENTIALS") {
+		t.Errorf("codex next steps should not mention GCP credentials:\n%s", out)
+	}
+	if !strings.Contains(out, "OPENAI_API_KEY") {
+		t.Errorf("codex next steps should mention OPENAI_API_KEY:\n%s", out)
+	}
+
+	cfg, err := config.LoadConfig(dir, config.LoadOpts{MissingOK: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := config.AgentSettingsFor(cfg.AgentEntries(), "lint-docs")
+	if !ok {
+		t.Fatal("agent not registered")
+	}
+	if entry.Runtime != "codex" {
+		t.Errorf("runtime = %q, want codex", entry.Runtime)
+	}
+}
+
 func TestResolveAgentNewOptions(t *testing.T) {
 	dir := newFullsendDir(t)
 
@@ -219,11 +282,51 @@ func TestResolveAgentNewOptions(t *testing.T) {
 		if opts.Role != "triage" || opts.Model != "opus" || opts.Effort != "high" {
 			t.Errorf("unexpected defaults: %+v", opts)
 		}
+		if opts.Runtime != "" {
+			t.Errorf("runtime = %q, want empty", opts.Runtime)
+		}
 		if opts.Description != "Custom lint-docs agent." {
 			t.Errorf("description = %q", opts.Description)
 		}
 		if !strings.Contains(opts.Trigger, "/fs-lint-docs") {
 			t.Errorf("default trigger = %q", opts.Trigger)
+		}
+	})
+
+	t.Run("runtime is threaded into Options", func(t *testing.T) {
+		f := defaultFlags(dir, "runtime")
+		f.runtime = "pi"
+		opts, runtimeName, _, err := resolveAgentNewOptions("lint-docs", f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Runtime != "pi" || runtimeName != "pi" {
+			t.Errorf("runtime = %q / %q, want pi", opts.Runtime, runtimeName)
+		}
+	})
+
+	t.Run("codex without an explicit model is refused", func(t *testing.T) {
+		f := defaultFlags(dir, "runtime")
+		f.runtime = "codex"
+		_, _, _, err := resolveAgentNewOptions("lint-docs", f)
+		if err == nil {
+			t.Fatal("want error")
+		}
+		if !strings.Contains(err.Error(), "no model was named") {
+			t.Errorf("error %q should mention no model was named", err)
+		}
+	})
+
+	t.Run("codex with an OpenAI model is accepted", func(t *testing.T) {
+		f := defaultFlags(dir, "runtime", "model")
+		f.runtime = "codex"
+		f.model = "openai/gpt-5.6-luna"
+		opts, _, _, err := resolveAgentNewOptions("lint-docs", f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Runtime != "codex" || opts.Model != "openai/gpt-5.6-luna" {
+			t.Errorf("unexpected options: %+v", opts)
 		}
 	})
 
@@ -258,8 +361,9 @@ description: From the spec
 on: label:needs-review
 model: sonnet
 timeout_minutes: 30
+runtime: pi
 `)
-		opts, _, _, err := resolveAgentNewOptions("", f)
+		opts, runtimeName, _, err := resolveAgentNewOptions("", f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,8 +373,35 @@ timeout_minutes: 30
 		if opts.TimeoutMinutes != 30 || opts.Description != "From the spec" {
 			t.Errorf("spec not applied: %+v", opts)
 		}
+		if opts.Runtime != "pi" || runtimeName != "pi" {
+			t.Errorf("spec runtime not applied: %q / %q", opts.Runtime, runtimeName)
+		}
 		if !strings.Contains(opts.Trigger, "needs-review") {
 			t.Errorf("spec trigger not applied: %q", opts.Trigger)
+		}
+	})
+
+	t.Run("spec runtime codex without a model is refused", func(t *testing.T) {
+		f := defaultFlags(dir)
+		f.specFile = writeSpec(t, "version: \"1\"\nname: from-spec\nruntime: codex\n")
+		_, _, _, err := resolveAgentNewOptions("", f)
+		if err == nil {
+			t.Fatal("want error")
+		}
+		if !strings.Contains(err.Error(), "no model was named") {
+			t.Errorf("error %q should mention no model was named", err)
+		}
+	})
+
+	t.Run("spec runtime codex with an OpenAI model is accepted", func(t *testing.T) {
+		f := defaultFlags(dir)
+		f.specFile = writeSpec(t, "version: \"1\"\nname: from-spec\nruntime: codex\nmodel: openai/gpt-5.6-luna\n")
+		opts, _, _, err := resolveAgentNewOptions("", f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Runtime != "codex" || opts.Model != "openai/gpt-5.6-luna" {
+			t.Errorf("unexpected options: %+v", opts)
 		}
 	})
 

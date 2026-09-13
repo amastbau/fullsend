@@ -32,6 +32,8 @@ func TestOptionsValidateRejects(t *testing.T) {
 		{"uncompilable trigger", func(o *Options) { o.Trigger = "this is not CEL" }, "does not compile"},
 		{"non-boolean trigger", func(o *Options) { o.Trigger = `"a string"` }, "does not compile"},
 		{"bad model", func(o *Options) { o.Model = "opus!!" }, "model"},
+		{"codex without a model", func(o *Options) { o.Runtime = "codex"; o.Model = "" }, "no model was named"},
+		{"codex with a Claude alias", func(o *Options) { o.Runtime = "codex"; o.Model = "opus" }, "Claude model aliases"},
 		{"bad effort", func(o *Options) { o.Effort = "extreme" }, "effort"},
 		{"bad slug", func(o *Options) { o.Slug = "-leading-dash" }, "slug"},
 		{"negative timeout", func(o *Options) { o.TimeoutMinutes = -1 }, "non-negative"},
@@ -66,12 +68,29 @@ func TestOptionsValidateAccepts(t *testing.T) {
 	if err := o.Validate(); err != nil {
 		t.Errorf("optional fields should be allowed to be empty: %v", err)
 	}
+
+	codex := validOptions()
+	codex.Runtime = "codex"
+	codex.Model = "openai/gpt-5.6-luna"
+	if err := codex.Validate(); err != nil {
+		t.Errorf("codex with an OpenAI model should be accepted: %v", err)
+	}
 }
 
 // TestTriggerlessAgentIsRefusedLoudly: an agent with no trigger registers,
 // validates and lists, then is silently skipped by dispatch with no
 // annotation. The error has to explain that, or the user will not understand
 // why the command refused.
+func TestUsesVertex(t *testing.T) {
+	for runtime, want := range map[string]bool{
+		"": true, "claude": true, "pi": true, "dummy": true, "codex": false,
+	} {
+		if got := (Options{Runtime: runtime}).usesVertex(); got != want {
+			t.Errorf("usesVertex(%q) = %v, want %v", runtime, got, want)
+		}
+	}
+}
+
 func TestTriggerlessAgentIsRefusedLoudly(t *testing.T) {
 	o := validOptions()
 	o.Trigger = ""
