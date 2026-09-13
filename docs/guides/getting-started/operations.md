@@ -40,12 +40,12 @@ fullsend github set "$OWNER/$REPO" FULLSEND_GCP_REGION global
 
 For initial GitLab setup, see [Configuring GitLab](configuring-gitlab.md). Secrets are checked for presence only, so `repos install` cannot update the *value* of an existing `FULLSEND_GCP_PROJECT_ID` or `FULLSEND_GCP_WIF_PROVIDER` — once those CI/CD secrets exist, a new `--inference-project` is a silent no-op for them. To change either one, edit the CI/CD variable directly in GitLab (Settings → CI/CD → Variables), since converge cannot read secret values back to compare or overwrite them.
 
-`FULLSEND_GCP_REGION` is a variable (not a secret), so it *is* checked for value drift and can be updated day-2 by re-running `repos install` with `--inference-region`:
-
-```bash
-fullsend repos install -f repos.yaml "$OWNER/$REPO" \
-  --inference-region "<GCP_REGION>"
-```
+`FULLSEND_GCP_REGION` is also a variable (not a secret), but converge treats
+`--inference-project`, `--inference-project-number`, and `--inference-region`
+as an all-or-nothing set when `--inference-wif-provider` isn't set — passing
+`--inference-region` alone fails with `incomplete inference flags`. Edit
+`FULLSEND_GCP_REGION` directly in GitLab CI/CD variables (Settings → CI/CD →
+Variables) instead, the same as the secrets above.
 
 | Key | Storage Type | Description | Example value |
 |-----|-------------|-------------|---------------|
@@ -93,6 +93,9 @@ To remove fullsend from a single repository:
 3. Revoke the `fullsend-bot` project access token (Settings → Access Tokens)
 4. If you installed using the Free-tier PAT fallback (`--gitlab-bot-token`/`FULLSEND_GITLAB_BOT_TOKEN` — see [Configuring GitLab § Free-tier bot token](configuring-gitlab.md#free-tier-bot-token)), also revoke that personal access token on the dedicated bot account (User Settings → Access Tokens, or Group Access Tokens if group-scoped). Deleting the `FULLSEND_FORGE_TOKEN` CI/CD variable in step 2 does not revoke the underlying PAT — it remains valid until revoked directly on the account that issued it.
 5. Delete fullsend pipeline schedules (`fullsend slash poll` and `fullsend event poll`)
+6. If you provisioned the shared `gitlab-oidc` WIF provider (see [Configuring GitLab § Inference Setup](configuring-gitlab.md#inference-setup)), revoke this repo's trust — `fullsend inference deprovision` does **not** cover `gitlab-oidc`; it only removes GitHub-style per-repo providers. Deleting the `FULLSEND_GCP_WIF_PROVIDER` CI/CD variable in step 2 does not revoke the underlying GCP IAM trust:
+   * Remove the IAM binding: `gcloud projects remove-iam-policy-binding "$GCP_PROJECT" --role="roles/aiplatform.user" --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-inference/attribute.project_path/$PROJECT_PATH"` (or the `attribute.namespace_path/$GROUP_PATH` member if you used the group recipe).
+   * If no other GitLab repo shares the provider, narrow or delete the `gitlab-oidc` provider's `--attribute-condition` for this project (or delete the provider entirely) so a stale CI job elsewhere can't request a token against it.
 
 If you manage your own self-hosted mint, run `fullsend mint unenroll "$OWNER/$REPO"` to remove the repo from the mint's allowlist. See the [standalone commands](#standalone-commands) table for details.
 

@@ -201,7 +201,11 @@ infrastructure for GitHub); a platform operator must create the
 shared `gitlab-oidc` provider once per GCP project before agent jobs
 can exchange tokens through it, or the CI/CD variables above will
 point at a provider that doesn't exist and token exchange will fail
-at runtime even though install succeeds.
+at runtime even though install succeeds. Creating the provider once
+per project does not by itself trust every repo on that project — the
+default recipe below scopes trust to a single repo; see
+[Authorizing multiple specific projects](#authorizing-multiple-specific-projects-alternative)
+if you're installing more than one repo against the same GCP project.
 
 To create it, add a GitLab-specific provider to the same
 `fullsend-inference` pool described in
@@ -244,6 +248,47 @@ Create the `fullsend-inference` pool first if it doesn't already exist
 (see the Advanced setup steps linked above). Agent jobs obtain a GitLab
 `id_tokens` OIDC token (`FULLSEND_ID_TOKEN`, audience `fullsend`) and
 exchange it through this provider.
+
+When you later remove a repo, this IAM binding and (if unshared)
+`--attribute-condition` value need explicit teardown — see [Operations §
+Per-repo teardown](operations.md#per-repo-teardown), step 6.
+`fullsend inference deprovision` does not cover `gitlab-oidc`.
+
+### Authorizing multiple specific projects (alternative)
+
+The `gitlab-oidc` provider is shared across every GitLab repo on the same
+GCP project, but its default `--attribute-condition` above pins trust to a
+single `PROJECT_PATH`. Installing a second repo against the same GCP
+project does not require widening trust to an entire namespace — keep
+exact `project_path` matches for just the repos you're installing by
+OR-ing their paths in the condition and binding one principalSet per
+project:
+
+```bash
+export GCP_PROJECT="<gcp-project>"
+export GITLAB_URL="https://gitlab.com"   # or your self-hosted instance URL
+
+gcloud iam workload-identity-pools providers update-oidc gitlab-oidc \
+  --location=global \
+  --workload-identity-pool=fullsend-inference \
+  --attribute-condition="assertion.project_path == 'group/project-a' || assertion.project_path == 'group/project-b'" \
+  --project="$GCP_PROJECT"
+
+export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
+
+for PROJECT_PATH in "group/project-a" "group/project-b"; do
+  gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+    --role="roles/aiplatform.user" \
+    --member="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-inference/attribute.project_path/$PROJECT_PATH" \
+    --condition=None
+done
+```
+
+Repeat the `--attribute-condition` update (adding another `||` clause) and
+the IAM binding loop each time you install another repo. This keeps trust
+scoped to exactly the repos you've installed, unlike the namespace-wide
+option below. Prefer the namespace-wide alternative only when the repo set
+isn't enumerable in advance.
 
 ### Authorizing a group or group tree (alternative)
 
