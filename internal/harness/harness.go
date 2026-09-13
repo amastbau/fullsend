@@ -819,7 +819,17 @@ func (h *Harness) ValidateFilesExist() error {
 		// so a relative policy: path only resolves if the file is committed
 		// next to the harness (#6834). Say how to get one rather than
 		// leaving a bare stat error to reverse-engineer.
-		return fmt.Errorf("%w (the policy must be committed alongside the harness: `fullsend agent new` writes policies/base.yaml when it is absent, or point policy: at the fleet copy by URL)", err)
+		//
+		// `agent new` only writes policies/base.yaml as a side effect of
+		// generating a brand-new agent: Generate() collision-checks every
+		// owned file (harness/agents/schema/post-script) before writing
+		// anything, so re-running it against an EXISTING agent name fails on
+		// that collision (or, with --force, rewrites the owned files) and
+		// never reaches the missing shared policy. Do not suggest re-running
+		// agent new as the fix here; the two things that actually work for
+		// an existing harness are committing a policy file next to it or
+		// pointing policy: at the fleet copy by URL.
+		return fmt.Errorf("%w (commit a policy file next to the harness, or point policy: at the fleet copy in fullsend-ai/agents by URL; `fullsend agent new` only writes one as part of generating a brand-new agent)", err)
 	}
 	if err := check("pre_script", h.PreScript); err != nil {
 		return err
