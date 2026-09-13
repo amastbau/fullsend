@@ -62,6 +62,7 @@ func TestFullsendRepoFilesExist(t *testing.T) {
 		"scripts/prepare-sandbox-credentials.sh",
 		"templates/shim-workflow-call.yaml",
 		".github/workflows/prioritize.yml",
+		"policies/base.yaml",
 	}
 
 	for _, path := range expected {
@@ -530,6 +531,36 @@ func TestWalkFullsendRepo(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, len(paths) >= 10, "expected at least 10 installed files, got %d", len(paths))
+}
+
+// TestScaffoldBasePolicyIsLayered pins #6834: policies/ is in LAYERED_DIRS
+// so workspace preparation copies it when the directory exists. The file
+// must be present in the embed (so the [[ -d ]] guard succeeds), must not
+// be installed into consumer repos (layered dirs are skipped at install),
+// and must be the default OpenShell filesystem/landlock/process policy.
+func TestScaffoldBasePolicyIsLayered(t *testing.T) {
+	data, err := FullsendRepoFile("policies/base.yaml")
+	require.NoError(t, err)
+	s := string(data)
+	assert.True(t, strings.HasPrefix(s, "---\n"), "policy must start with YAML document start marker")
+	assert.Contains(t, s, "version: 1")
+	assert.Contains(t, s, "filesystem_policy:")
+	assert.Contains(t, s, "landlock:")
+	assert.Contains(t, s, "process:")
+
+	var layered []string
+	require.NoError(t, WalkLayeredContent(func(path string, _ []byte) error {
+		layered = append(layered, path)
+		return nil
+	}))
+	assert.Contains(t, layered, "policies/base.yaml")
+
+	err = WalkFullsendRepo(func(path string, _ []byte) error {
+		assert.False(t, strings.HasPrefix(path, "policies/"),
+			"WalkFullsendRepo should skip layered policies/, got %s", path)
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 func TestLayeredDirsNotInstalled(t *testing.T) {

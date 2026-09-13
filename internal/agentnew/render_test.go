@@ -1,6 +1,7 @@
 package agentnew
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fullsend-ai/fullsend/internal/harness"
+	"github.com/fullsend-ai/fullsend/internal/scaffold"
 )
 
 // writeTree writes a rendered file set into dir, as the command does.
@@ -101,6 +103,27 @@ func TestGeneratedHarnessHasNoDeprecatedShapes(t *testing.T) {
 	}
 	if !strings.Contains(yaml, "policy: policies/base.yaml") {
 		t.Error("generated harness must always set policy:")
+	}
+}
+
+// TestSharedPolicyMatchesScaffold is the #6834 contract: agent new writes
+// the same policies/base.yaml CI layers from the embedded scaffold, so a
+// generated agent and a sandbox run after github setup see one policy.
+func TestSharedPolicyMatchesScaffold(t *testing.T) {
+	want, err := scaffold.FullsendRepoFile("policies/base.yaml")
+	if err != nil {
+		t.Fatalf("scaffold policies/base.yaml: %v", err)
+	}
+	files, err := Render(testOptions("lint-docs", "triage"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := fileByPath(t, files, "policies/base.yaml")
+	if !bytes.Equal(got.Data, want) {
+		t.Fatalf("generated policies/base.yaml differs from the scaffold copy")
+	}
+	if !got.Shared {
+		t.Error("policies/base.yaml must be a shared asset")
 	}
 }
 

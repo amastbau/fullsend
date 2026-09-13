@@ -92,7 +92,10 @@ it ships with marked sections to fill in. Everything else is complete.
 The policy, provider and profile files are shared by every agent in the
 directory, so they are never overwritten — including with `--force`.
 `fullsend github setup` does not copy these into your repository, which is why
-`agent new` writes them when they are absent.
+`agent new` writes them when they are absent. CI still layers
+`policies/base.yaml` and `providers/` from the scaffold at run time, so a
+harness that references `policy: policies/base.yaml` does not fail file
+validation in Actions just because the file was never committed.
 
 ### Flags
 
@@ -367,7 +370,7 @@ request.
 | `unknown --on preset "..."` followed by the preset list | `--on` is not one of the four presets | Use a listed preset, or pass raw CEL with `--trigger` |
 | `a trigger is required: pass --on with a preset, or --trigger` | `--trigger ""` was passed explicitly | Give a real trigger. A trigger-less agent is silently never dispatched |
 | `fullsend dir ... does not exist; run ` + "`fullsend github setup`" + ` first` | `--fullsend-dir` points at nothing | Scaffold the repo first |
-| `validating files: policy: stat .../policies/base.yaml: no such file or directory` | A hand-edited harness references a file that is not there | Re-run `agent new`, which writes the policy when absent |
+| `validating files: policy: stat .../policies/base.yaml: no such file or directory` | A local `fullsend run` cannot find the policy next to the harness | Re-run `agent new`, which writes the policy when absent. CI layers `policies/base.yaml` from the scaffold, so this error in Actions usually means an older fullsend pin that predates the scaffold file |
 | Agent crashes at 0s in CI | The sandbox cannot reach Vertex — a provider or profile file is missing | Confirm `providers/` and `profiles/` exist next to the harness |
 | `runner env ... is not set` at `fullsend run` | A `${VAR}` in the harness `env` block is unset | `agent new` does not check host variables at generation time; supply them via `--env-file` locally or the workflow `env:` block in CI |
 
