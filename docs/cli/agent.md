@@ -106,7 +106,7 @@ directory, so they are never overwritten — including with `--force`.
 | `--trigger` | | A trigger written by hand, in CEL (the expression language dispatch evaluates); mutually exclusive with `--on` |
 | `--model` | `opus` | Model for the agent. `--runtime codex` has no Claude-alias default: pass an OpenAI id (`openai/<id>` or a bare id) or the command refuses |
 | `--effort` | `high` | Effort level (`low`, `medium`, `high`, `xhigh`, `max`) |
-| `--runtime` | | Agent runtime recorded in `config.yaml` (`claude`, `pi` or `codex`). Also shapes the generated harness: Vertex `host_files` and sandbox env for `claude`/`pi` (and the empty default); an OpenAI `--model` is required for `codex`. The `openai` provider is declared on every role — a run that does not call OpenAI skips it |
+| `--runtime` | | Agent runtime recorded in `config.yaml` (`claude`, `pi` or `codex`). When omitted, the agent dispatches under the repo's `config.yaml` `runtime:` default (`claude` if that is also unset) — the harness is shaped for that resolved runtime, not left as if it were `claude`. Also shapes the generated harness: Vertex `host_files` and sandbox env for `claude`/`pi`; an OpenAI `--model` is required for `codex`, and an OpenAI `--model` on `pi` omits the Vertex `host_files`/env too. The `openai` provider is declared on every role — a run that does not call OpenAI skips it |
 | `--slug` | `<owner>-<name>` | Names the GitHub App to look for when the agent is installed; `<owner>` comes from the `origin` remote |
 | `--image` | per-role pin | Container image the agent runs inside |
 | `--timeout-minutes` | `15` | Agent timeout in minutes |

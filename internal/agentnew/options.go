@@ -2,6 +2,7 @@ package agentnew
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/fullsend-ai/fullsend/internal/config"
 	"github.com/fullsend-ai/fullsend/internal/harness"
@@ -34,10 +35,15 @@ type Options struct {
 	Image          string
 	TimeoutMinutes int
 	ValidationLoop bool
-	// Runtime is the already-validated --runtime value (claude, pi, or
-	// codex). Empty means the harness inherits the repo default, which is
-	// claude. It is not written into the harness YAML — config.yaml holds
-	// it — but it decides Vertex host_files/env and whether model: must be
+	// Runtime is the already-validated, already-resolved runtime the agent
+	// will dispatch under (claude, pi, or codex): the --runtime flag or spec
+	// value, or — when neither is given — the caller's resolved repo-wide
+	// config.yaml default. Callers must resolve that default themselves
+	// before constructing Options; leaving this empty when a --runtime flag
+	// was not given would make UsesVertex assume claude even in a repo
+	// configured to dispatch as codex or pi by default. It is not written
+	// into the harness YAML — config.yaml holds the per-agent override, if
+	// any — but it decides Vertex host_files/env and whether model: must be
 	// an OpenAI id (#7264).
 	Runtime string
 }
@@ -91,17 +97,40 @@ func (o *Options) Validate() error {
 	return nil
 }
 
-// usesVertex reports whether the generated harness should carry the GCP
+// UsesVertex reports whether the generated harness should carry the GCP
 // credential host_files and the Vertex sandbox env. fullsend pins codex to
 // OpenAI, so those fields would only fail the run before it starts (#7264).
 // pi is multi-provider, so its answer also depends on the model: --runtime
 // pi with an OpenAI model calls OpenAI, not Vertex, and would otherwise be
 // stranded needing GOOGLE_APPLICATION_CREDENTIALS it will never use for the
-// same reason as #7264. agentruntime.NeedsOpenAIProvider is the single
-// resolution buildPiRunCommand itself gates on, reused here rather than
-// duplicating it. claude and the empty default always call Vertex; Options
-// carries only one Model, used as both the run model and the agent
-// definition's frontmatter model, so it is passed as both.
-func (o Options) usesVertex() bool {
-	return !agentruntime.NeedsOpenAIProvider(o.Runtime, o.Model, o.Model, nil)
+// same reason as #7264.
+//
+// This is deliberately not agentruntime.NeedsOpenAIProvider: that resolves a
+// bare pi model id through translatePiModel, which reads the ambient
+// FULLSEND_PI_PROVIDER environment variable of the *run*. Harness generation
+// happens in a different process (and often a different machine, e.g. CI)
+// than the run it generates for, so branching on that variable here would
+// make the generated harness depend on whatever happened to be set in the
+// generator's environment rather than on Options alone — e.g. a developer
+// with FULLSEND_PI_PROVIDER=openai set would get a harness with Vertex
+// host_files/env omitted even though the run (with that variable unset, as
+// in CI) still needs them. UsesVertex only trusts an explicit "openai/"
+// prefix on the model Options itself carries.
+func (o Options) UsesVertex() bool {
+	switch o.Runtime {
+	case "codex":
+		return false
+	case "pi":
+		return !hasOpenAIPrefix(o.Model)
+	default:
+		return true
+	}
+}
+
+// hasOpenAIPrefix reports whether model carries an explicit "openai/"
+// provider prefix. Matching is case-insensitive because pi resolves
+// provider prefixes case-insensitively (see translatePiModel).
+func hasOpenAIPrefix(model string) bool {
+	prefix, _, ok := strings.Cut(model, "/")
+	return ok && strings.EqualFold(prefix, "openai")
 }

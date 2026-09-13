@@ -99,7 +99,7 @@ func buildHarness(opts Options, role Role) (*harness.Harness, error) {
 	// before anything runtime-specific runs, so an unset
 	// GOOGLE_APPLICATION_CREDENTIALS refuses a codex agent that never
 	// calls Vertex (#7264).
-	if opts.usesVertex() {
+	if opts.UsesVertex() {
 		hostFiles = []harness.HostFile{
 			{Src: "${GOOGLE_APPLICATION_CREDENTIALS}", Dest: "/tmp/.gcp-credentials.json"},
 			{Src: "${GCP_OIDC_TOKEN_FILE}", Dest: "/sandbox/workspace/.gcp-oidc-token", Optional: true},

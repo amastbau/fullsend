@@ -285,25 +285,100 @@ func TestAgentNewCodexOmitsVertexHostFiles(t *testing.T) {
 	}
 }
 
+// TestAgentNewPiOpenAIModelOmitsVertexHostFiles: --runtime pi with an
+// OpenAI model calls OpenAI, not Vertex (the same distinction
+// TestAgentNewCodexOmitsVertexHostFiles checks for codex), so both the
+// generated harness and the printed next steps must match — mentioning
+// OPENAI_API_KEY and not GOOGLE_APPLICATION_CREDENTIALS.
+func TestAgentNewPiOpenAIModelOmitsVertexHostFiles(t *testing.T) {
+	dir := newFullsendDir(t)
+	f := defaultFlags(dir, "runtime", "model")
+	f.runtime = "pi"
+	f.model = "openai/gpt-6-astra"
+	out, err := runNew(t, "lint-docs", f)
+	if err != nil {
+		t.Fatalf("runAgentNew: %v\n%s", err, out)
+	}
+
+	h, err := harness.Load(filepath.Join(dir, "harness", "lint-docs.yaml"))
+	if err != nil {
+		t.Fatalf("generated harness does not load: %v", err)
+	}
+	for _, hf := range h.HostFiles {
+		if strings.Contains(hf.Src, "GOOGLE_APPLICATION_CREDENTIALS") {
+			t.Errorf("pi with an OpenAI model must not require GCP credentials: %+v", hf)
+		}
+	}
+	if strings.Contains(out, "GOOGLE_APPLICATION_CREDENTIALS") {
+		t.Errorf("pi with an OpenAI model: next steps should not mention GCP credentials:\n%s", out)
+	}
+	if !strings.Contains(out, "OPENAI_API_KEY") {
+		t.Errorf("pi with an OpenAI model: next steps should mention OPENAI_API_KEY:\n%s", out)
+	}
+}
+
 func TestResolveAgentNewOptions(t *testing.T) {
 	dir := newFullsendDir(t)
 
 	t.Run("defaults", func(t *testing.T) {
-		opts, _, _, err := resolveAgentNewOptions("lint-docs", defaultFlags(dir))
+		opts, runtimeName, _, err := resolveAgentNewOptions("lint-docs", defaultFlags(dir))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if opts.Role != "triage" || opts.Model != "opus" || opts.Effort != "high" {
 			t.Errorf("unexpected defaults: %+v", opts)
 		}
-		if opts.Runtime != "" {
-			t.Errorf("runtime = %q, want empty", opts.Runtime)
+		// dir's config.yaml sets no runtime:, so the repo default (claude)
+		// resolves into opts.Runtime even though no --runtime flag was
+		// given. runtimeName, the flag/spec-only value that agent set
+		// --runtime would write, stays empty.
+		if opts.Runtime != "claude" {
+			t.Errorf("runtime = %q, want the resolved repo default claude", opts.Runtime)
+		}
+		if runtimeName != "" {
+			t.Errorf("runtimeName = %q, want empty (no explicit --runtime given)", runtimeName)
 		}
 		if opts.Description != "Custom lint-docs agent." {
 			t.Errorf("description = %q", opts.Description)
 		}
 		if !strings.Contains(opts.Trigger, "/fs-lint-docs") {
 			t.Errorf("default trigger = %q", opts.Trigger)
+		}
+	})
+
+	t.Run("no runtime given resolves the repo's configured default", func(t *testing.T) {
+		// A repo whose config.yaml already sets runtime: codex must shape
+		// the generated harness (and the opus-default-clearing / codex
+		// model check) for codex, even though `agent new` was not given
+		// --runtime: that is what runtime.ResolveForAgent will dispatch
+		// this agent under (#7264 reached via the repo-wide default).
+		codexDir := filepath.Join(t.TempDir(), ".fullsend")
+		if err := os.MkdirAll(codexDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(codexDir, "config.yaml"),
+			[]byte("version: \"1\"\nroles: [triage]\nruntime: codex\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err := resolveAgentNewOptions("lint-docs", defaultFlags(codexDir))
+		if err == nil {
+			t.Fatal("want error: the repo default is codex, so the default opus model must be refused")
+		}
+		if !strings.Contains(err.Error(), "no model was named") {
+			t.Errorf("error %q should mention no model was named", err)
+		}
+
+		f := defaultFlags(codexDir, "model")
+		f.model = "openai/gpt-5.6-luna"
+		opts, runtimeName, _, err := resolveAgentNewOptions("lint-docs", f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if opts.Runtime != "codex" {
+			t.Errorf("runtime = %q, want the resolved repo default codex", opts.Runtime)
+		}
+		if runtimeName != "" {
+			t.Errorf("runtimeName = %q, want empty: no explicit --runtime was given, so `agent set --runtime` must not fire", runtimeName)
 		}
 	})
 

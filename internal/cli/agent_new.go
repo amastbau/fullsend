@@ -84,7 +84,7 @@ Examples:
 	cmd.Flags().StringVar(&f.trigger, "trigger", "", "raw CEL trigger expression; mutually exclusive with --on")
 	cmd.Flags().StringVar(&f.model, "model", agentnew.DefaultModel, "model for the agent (default opus; --runtime codex requires an OpenAI id)")
 	cmd.Flags().StringVar(&f.effort, "effort", agentnew.DefaultEffort, "effort level (low, medium, high, xhigh, max)")
-	cmd.Flags().StringVar(&f.runtime, "runtime", "", "agent runtime recorded in config.yaml (claude, pi or codex); also shapes the generated harness (Vertex credentials for claude/pi; OpenAI --model required for codex)")
+	cmd.Flags().StringVar(&f.runtime, "runtime", "", "agent runtime recorded in config.yaml (claude, pi or codex); also shapes the generated harness (Vertex credentials for claude/pi; OpenAI --model required for codex, and an OpenAI --model on pi omits Vertex credentials too)")
 	cmd.Flags().StringVar(&f.slug, "slug", "", "harness slug (default: <owner>-<name> from the origin remote)")
 	cmd.Flags().StringVar(&f.image, "image", "", "sandbox image (default: the fleet's pin for this role)")
 	cmd.Flags().IntVar(&f.timeoutMinutes, "timeout-minutes", agentnew.DefaultTimeoutMinutes, "agent timeout in minutes")
@@ -214,11 +214,36 @@ func resolveAgentNewOptions(name string, f agentNewFlags) (opts agentnew.Options
 		return opts, "", "", fmt.Errorf("runtime %q is not valid (allowed: %s)",
 			runtimeName, strings.Join(userFacingRuntimes(), ", "))
 	}
+	// opts.Runtime must match what dispatch will actually use, not just the
+	// flag: when neither --runtime nor a spec runtime: is given,
+	// runtime.ResolveForAgent falls back to the repo-wide config.yaml
+	// `runtime:` key (defaulting to claude), not to "". Leaving opts.Runtime
+	// empty here would generate a Vertex-shaped harness with an unvalidated
+	// opus default for an agent that will actually dispatch as codex or pi
+	// — the #7264 exposure again, reached through the repo-wide default
+	// instead of --runtime. runtimeName itself (the flag/spec-only value,
+	// returned separately below) is left untouched: it is what runAgentSet
+	// writes, and writing the resolved default would record a per-agent
+	// override nobody asked for.
 	opts.Runtime = runtimeName
-	// The cobra default for --model is opus, a Claude alias. --runtime
-	// codex without an explicit --model (or spec model) must not silently
-	// write that alias into the harness.
-	if runtimeName == "codex" && !f.changed("model") && !modelFromSpec {
+	if opts.Runtime == "" {
+		cfg, cfgErr := config.LoadConfig(f.fullsendDir, config.LoadOpts{MissingOK: true})
+		if cfgErr != nil {
+			return opts, "", "", cfgErr
+		}
+		// Only a per-repo config carries a runtime: default; an org-mode
+		// config (or a directory config.LoadConfig had to default) leaves
+		// opts.Runtime "", which UsesVertex and Validate already treat the
+		// same as the claude default runtime.ResolveForAgent falls back to.
+		if perRepo, ok := cfg.(config.PerRepoConfigReader); ok {
+			opts.Runtime = perRepo.ConfigRuntime()
+		}
+	}
+	// The cobra default for --model is opus, a Claude alias. Generating for
+	// a runtime that requires an OpenAI id (codex, or the repo's resolved
+	// default when it is codex) without an explicit --model (or spec model)
+	// must not silently write that alias into the harness.
+	if opts.Runtime == "codex" && !f.changed("model") && !modelFromSpec {
 		opts.Model = ""
 	}
 
@@ -319,7 +344,7 @@ func printNextSteps(opts agentnew.Options, f agentNewFlags, printer *ui.Printer)
 	printer.Raw(fmt.Sprintf("  1. Fill in the marked sections of agents/%s.md — that file is the agent's prompt.\n", opts.Name))
 	printer.Raw(fmt.Sprintf("  2. Test locally:\n       fullsend run %s --fullsend-dir %s \\\n         --target-repo . --env-file .env.local\n",
 		opts.Name, f.fullsendDir))
-	if opts.Runtime == "codex" {
+	if !opts.UsesVertex() {
 		printer.Raw("     .env.local needs GITHUB_ISSUE_URL, GH_TOKEN, and OPENAI_API_KEY.\n")
 		printer.Raw("     The harness declares the openai provider; the runner keeps the key\n")
 		printer.Raw("     out of the sandbox. GH_TOKEN must be a real token: a connectivity\n")

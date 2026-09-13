@@ -77,16 +77,16 @@ func TestOptionsValidateAccepts(t *testing.T) {
 	}
 }
 
-// TestTriggerlessAgentIsRefusedLoudly: an agent with no trigger registers,
-// validates and lists, then is silently skipped by dispatch with no
-// annotation. The error has to explain that, or the user will not understand
-// why the command refused.
+// TestUsesVertex covers every runtime value UsesVertex branches on,
+// including the empty string: Options.Runtime is expected to already carry
+// the resolved runtime, but UsesVertex still needs a defined answer if a
+// caller leaves it empty, and that answer is the same as claude's.
 func TestUsesVertex(t *testing.T) {
 	for runtime, want := range map[string]bool{
 		"": true, "claude": true, "pi": true, "dummy": true, "codex": false,
 	} {
-		if got := (Options{Runtime: runtime}).usesVertex(); got != want {
-			t.Errorf("usesVertex(%q) = %v, want %v", runtime, got, want)
+		if got := (Options{Runtime: runtime}).UsesVertex(); got != want {
+			t.Errorf("UsesVertex(%q) = %v, want %v", runtime, got, want)
 		}
 	}
 }
@@ -96,14 +96,29 @@ func TestUsesVertex(t *testing.T) {
 // host_files and Vertex sandbox env either — the same failure shape as
 // #7264, for pi instead of codex.
 func TestUsesVertexPiKeysOnModelToo(t *testing.T) {
-	if got := (Options{Runtime: "pi", Model: "openai/gpt-6-astra"}).usesVertex(); got != false {
-		t.Errorf("usesVertex(pi, openai model) = %v, want false", got)
+	if got := (Options{Runtime: "pi", Model: "openai/gpt-6-astra"}).UsesVertex(); got != false {
+		t.Errorf("UsesVertex(pi, openai model) = %v, want false", got)
 	}
-	if got := (Options{Runtime: "pi", Model: "claude-opus-4-8"}).usesVertex(); got != true {
-		t.Errorf("usesVertex(pi, vertex model) = %v, want true", got)
+	if got := (Options{Runtime: "pi", Model: "claude-opus-4-8"}).UsesVertex(); got != true {
+		t.Errorf("UsesVertex(pi, vertex model) = %v, want true", got)
 	}
 }
 
+// TestUsesVertexPiIgnoresAmbientProvider: UsesVertex must not reproduce the
+// #7264 stranded-credentials shape by depending on the generator process's
+// ambient FULLSEND_PI_PROVIDER — only an explicit "openai/" prefix on
+// Options.Model may turn off Vertex for pi.
+func TestUsesVertexPiIgnoresAmbientProvider(t *testing.T) {
+	t.Setenv("FULLSEND_PI_PROVIDER", "openai")
+	if got := (Options{Runtime: "pi", Model: "opus"}).UsesVertex(); got != true {
+		t.Errorf("UsesVertex(pi, bare model) under FULLSEND_PI_PROVIDER=openai = %v, want true", got)
+	}
+}
+
+// TestTriggerlessAgentIsRefusedLoudly: an agent with no trigger registers,
+// validates and lists, then is silently skipped by dispatch with no
+// annotation. The error has to explain that, or the user will not understand
+// why the command refused.
 func TestTriggerlessAgentIsRefusedLoudly(t *testing.T) {
 	o := validOptions()
 	o.Trigger = ""
