@@ -221,7 +221,7 @@ process:
   run_as_group: sandbox
 ```
 
-Most custom agents can reuse the `policies/base.yaml` that [`fullsend agent new`](../../cli/agent.md#agent-new) writes (the same policy the fleet agents run under) instead of creating their own. Override only when your agent has specific filesystem or process requirements. Either way the policy is committed with the harness — CI does not supply one.
+Most custom agents can reuse the `policies/base.yaml` that [`fullsend agent new`](../../cli/agent.md#agent-new) writes — the same policy the fleet agents run under — and only write their own when they need different filesystem or process rules. Either way, commit the policy: CI does not supply one.
 
 ### Network access via providers (recommended)
 
