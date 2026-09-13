@@ -5,8 +5,18 @@ Day-2 administration for fullsend per-repo installations: configuration updates,
 ## Prerequisites
 
 - **fullsend CLI** installed (see [Getting Started](../getting-started/))
+
+The remaining prerequisites are forge-specific:
+
+**GitHub:**
+
 - **GitHub access** — repository admin for the target repository
 - **`gh` CLI** authenticated with the required OAuth scopes (see [OAuth scope reference](../infrastructure/advanced-setup.md#oauth-scope-reference))
+
+**GitLab:** none of the GitHub-specific prerequisites above apply — GitLab
+does not use `gh`. See [Configuring GitLab § Prerequisites](configuring-gitlab.md#prerequisites)
+for the GitLab access token and permissions needed for the day-2 tasks
+documented below.
 
 ## Updating configuration values
 
@@ -28,11 +38,13 @@ fullsend github set "$OWNER/$REPO" FULLSEND_GCP_REGION global
 
 ### GitLab
 
-For initial GitLab setup, see [Configuring GitLab](configuring-gitlab.md). For day-2 updates, re-run `repos install` with updated values to converge configuration:
+For initial GitLab setup, see [Configuring GitLab](configuring-gitlab.md). Secrets are checked for presence only, so `repos install` cannot update the *value* of an existing `FULLSEND_GCP_PROJECT_ID` or `FULLSEND_GCP_WIF_PROVIDER` — once those CI/CD secrets exist, a new `--inference-project` is a silent no-op for them. To change either one, edit the CI/CD variable directly in GitLab (Settings → CI/CD → Variables), since converge cannot read secret values back to compare or overwrite them.
+
+`FULLSEND_GCP_REGION` is a variable (not a secret), so it *is* checked for value drift and can be updated day-2 by re-running `repos install` with `--inference-region`:
 
 ```bash
 fullsend repos install -f repos.yaml "$OWNER/$REPO" \
-  --inference-project "<GCP_PROJECT>"
+  --inference-region "<GCP_REGION>"
 ```
 
 | Key | Storage Type | Description | Example value |

@@ -210,12 +210,62 @@ The GitHub recipe there does not carry over as-is: it points the issuer
 at GitHub, maps `assertion.repository*` claims that GitLab tokens don't
 have, and omits `--allowed-audiences`, so a naively adapted provider
 rejects the `aud: "fullsend"` token agent jobs present. Use GitLab's
-issuer, id-token claims, and an explicit allowed audience instead:
+issuer, id-token claims, and an explicit allowed audience instead.
+
+This guide is single-repo, so the default recipe below scopes trust to
+the exact project being installed, using the `project_path` claim:
 
 ```bash
 export GCP_PROJECT="<gcp-project>"
 export GITLAB_URL="https://gitlab.com"   # or your self-hosted instance URL
-export GROUP_PATH="<group>"              # the project's immediate parent namespace path, e.g. "my-group" or "my-group/subgroup" — not an ancestor group
+export PROJECT_PATH="<group/project>"    # the exact project path being installed
+
+gcloud iam workload-identity-pools providers create-oidc gitlab-oidc \
+  --location=global \
+  --workload-identity-pool=fullsend-inference \
+  --issuer-uri="$GITLAB_URL" \
+  --allowed-audiences="fullsend" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.namespace_path=assertion.namespace_path,attribute.project_path=assertion.project_path" \
+  --attribute-condition="assertion.project_path == '$PROJECT_PATH'" \
+  --project="$GCP_PROJECT"
+```
+
+```bash
+export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
+export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-inference/attribute.project_path/$PROJECT_PATH"
+
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --role="roles/aiplatform.user" \
+  --member="$WIF_PRINCIPAL" \
+  --condition=None
+```
+
+Create the `fullsend-inference` pool first if it doesn't already exist
+(see the Advanced setup steps linked above). Agent jobs obtain a GitLab
+`id_tokens` OIDC token (`FULLSEND_ID_TOKEN`, audience `fullsend`) and
+exchange it through this provider.
+
+### Authorizing a group or group tree (alternative)
+
+> **Warning:** this widens trust beyond the single repo above — every
+> project in the namespace(s) you allow can obtain the `id_tokens` OIDC
+> token, federate through this provider, and receive
+> `roles/aiplatform.user`. Prefer the per-project recipe above unless
+> you are deliberately provisioning inference for many repos in the
+> same namespace.
+
+To authorize every project under one immediate parent namespace
+instead of a single project, use the `namespace_path` claim. GitLab's
+`namespace_path` ID-token claim is the project's immediate parent
+namespace path (for example, a project at `my-group/subgroup/project`
+has `namespace_path=my-group/subgroup`) — it is not any ancestor
+group. `GROUP_PATH` below must equal that exact path; setting it to a
+higher-level group (`my-group`) to try to cover every project
+underneath it will not match, and jobs from nested projects will be
+rejected at STS.
+
+```bash
+export GROUP_PATH="<group>"   # the exact immediate parent namespace, e.g. "my-group" or "my-group/subgroup"
 
 gcloud iam workload-identity-pools providers create-oidc gitlab-oidc \
   --location=global \
@@ -225,28 +275,40 @@ gcloud iam workload-identity-pools providers create-oidc gitlab-oidc \
   --attribute-mapping="google.subject=assertion.sub,attribute.namespace_path=assertion.namespace_path,attribute.project_path=assertion.project_path" \
   --attribute-condition="assertion.namespace_path == '$GROUP_PATH'" \
   --project="$GCP_PROJECT"
+
+export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-inference/attribute.namespace_path/$GROUP_PATH"
+
+gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
+  --role="roles/aiplatform.user" \
+  --member="$WIF_PRINCIPAL" \
+  --condition=None
 ```
 
-GitLab's `namespace_path` ID-token claim is the project's immediate
-parent namespace path (for example, a project at
-`my-group/subgroup/project` has `namespace_path=my-group/subgroup`) —
-it is not any ancestor group. `GROUP_PATH` above must equal that exact
-path; setting it to a higher-level group (`my-group`) to try to cover
-every project underneath it will not match, and jobs from nested
-projects will be rejected at STS.
+This grants `roles/aiplatform.user` to every GitLab project whose
+immediate parent namespace is exactly `$GROUP_PATH` — not just the one
+repo being installed.
 
-Covering a group tree takes changes at both layers, not just one. GCP
-IAM `principalSet://.../attribute.namespace_path/$VALUE` bindings are
+Covering a group tree (a group and its subgroups) takes changes at
+both layers, not just one. GCP IAM
+`principalSet://.../attribute.namespace_path/$VALUE` bindings are
 exact-match on the mapped attribute, so the single `$GROUP_PATH`
-principalSet shown below only ever admits that one namespace — and
-binding additional principalSets for nested namespaces has no effect
-by itself, because the single-value `--attribute-condition` above
-still makes STS refuse to mint a token for any assertion whose
+principalSet above only ever admits that one namespace — and binding
+additional principalSets for nested namespaces has no effect by
+itself, because the single-value `--attribute-condition` above still
+makes STS refuse to mint a token for any assertion whose
 `namespace_path` isn't exactly `$GROUP_PATH`. To cover a tree, do
-both: (1) widen `--attribute-condition` so STS accepts every
-`namespace_path` you intend to allow (for example, an OR of exact
-values, or a documented prefix check), and (2) bind a separate
-`principalSet` for each of those same values.
+both:
+
+1. Widen `--attribute-condition` so STS accepts every `namespace_path`
+   you intend to allow — for example, an OR of exact values, or a
+   delimiter-safe prefix check such as
+   `assertion.namespace_path == 'my-group' || assertion.namespace_path.startsWith('my-group/')`.
+   **Do not** write `assertion.namespace_path.startsWith('$GROUP_PATH')`
+   without the trailing `/` — that fails open and also matches
+   unrelated namespaces like `my-group-evil`.
+2. Bind a separate `principalSet` for each of those same values (or use
+   a custom attribute mapping that collapses nested paths to a single
+   bindable value).
 
 Do not grant the broader
 `principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-inference/*`
@@ -258,31 +320,6 @@ itself, and it has no effect on `github-oidc` or any other provider
 already federated into the same shared pool. Binding it grants Vertex
 AI access to every identity in the pool, not just the GitLab
 namespaces you intend to cover.
-
-```bash
-export PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT" --format='value(projectNumber)')
-export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-inference/attribute.namespace_path/$GROUP_PATH"
-
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-  --role="roles/aiplatform.user" \
-  --member="$WIF_PRINCIPAL" \
-  --condition=None
-```
-
-This grants `roles/aiplatform.user` to every GitLab project whose
-immediate parent namespace is exactly `$GROUP_PATH` — not just the one
-repo being installed. For a single-repo, least-privilege grant instead,
-bind `attribute.project_path` (already included in the attribute
-mapping above) to the exact `<group>/<project>` path:
-
-```bash
-export WIF_PRINCIPAL="principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/fullsend-inference/attribute.project_path/<group/project>"
-```
-
-Create the `fullsend-inference` pool first if it doesn't already exist
-(see the Advanced setup steps linked above). Agent jobs obtain a GitLab
-`id_tokens` OIDC token (`FULLSEND_ID_TOKEN`, audience `fullsend`) and
-exchange it through this provider.
 
 If a platform operator already provisioned a WIF provider, pass the full
 resource name instead of relying on the default `gitlab-oidc` path:
