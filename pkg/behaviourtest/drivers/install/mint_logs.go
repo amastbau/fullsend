@@ -248,20 +248,12 @@ func (c *cfWorkerLogCollector) fetchLogEvents(ctx context.Context, scriptName st
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyStr := string(respBody)
-		if len(bodyStr) > 512 {
-			bodyStr = bodyStr[:512] + "...[truncated]"
-		}
-		return nil, 0, fmt.Errorf("Cloudflare API returned %d: %s", resp.StatusCode, bodyStr)
+		return nil, 0, fmt.Errorf("Cloudflare API returned %d: %s", resp.StatusCode, truncateBody(string(respBody), 512))
 	}
 
 	var envelope cfAPIQueryResponse
 	if err := json.Unmarshal(respBody, &envelope); err != nil {
-		bodyStr := string(respBody)
-		if len(bodyStr) > 512 {
-			bodyStr = bodyStr[:512] + "...[truncated]"
-		}
-		return nil, 0, fmt.Errorf("decoding Cloudflare telemetry response: %w (body: %s)", err, bodyStr)
+		return nil, 0, fmt.Errorf("decoding Cloudflare telemetry response: %w (body: %s)", err, truncateBody(string(respBody), 512))
 	}
 
 	if !envelope.Success {
@@ -272,12 +264,28 @@ func (c *cfWorkerLogCollector) fetchLogEvents(ctx context.Context, scriptName st
 		return nil, 0, fmt.Errorf("Cloudflare telemetry response did not include an %q view result; the response shape may not match the documented API", "events")
 	}
 
-	eventsJSON, err := json.Marshal(envelope.Result.Events.Events)
+	evts := envelope.Result.Events.Events
+	if evts == nil {
+		evts = []json.RawMessage{}
+	}
+
+	eventsJSON, err := json.Marshal(evts)
 	if err != nil {
 		return nil, 0, fmt.Errorf("marshaling mint event records: %w", err)
 	}
 
-	return eventsJSON, len(envelope.Result.Events.Events), nil
+	return eventsJSON, len(evts), nil
+}
+
+// truncateBody truncates b to at most max bytes, appending a
+// "...[truncated]" marker when truncation occurs. It is used to keep
+// Cloudflare API response bodies out of error messages at an
+// unbounded length.
+func truncateBody(b string, max int) string {
+	if len(b) > max {
+		return b[:max] + "...[truncated]"
+	}
+	return b
 }
 
 // formatCFMessages renders a Cloudflare API envelope's error/message
