@@ -48,7 +48,7 @@ func rewriteFrontmatterSkills(frontBytes []byte, existing, added []string, eol s
 	if err := yaml.Unmarshal(frontBytes, &doc); err != nil {
 		return nil, fmt.Errorf("parsing frontmatter: %w", err)
 	}
-	if len(doc.Content) == 0 {
+	if len(doc.Content) == 0 || (len(doc.Content) == 1 && doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].Tag == "!!null") {
 		doc.Kind = yaml.DocumentNode
 		doc.Content = []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}
 	}

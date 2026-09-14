@@ -104,6 +104,18 @@ func TestInjectFrontmatterSkills_EmptyFrontmatter(t *testing.T) {
 	assertValidFrontmatter(t, result)
 }
 
+func TestInjectFrontmatterSkills_CommentOnlyFrontmatter(t *testing.T) {
+	t.Parallel()
+	src := "---\n# comment\n---\nBody\n"
+	result, err := injectFrontmatterSkills([]byte(src), []string{"/path/to/skill-a"})
+	require.NoError(t, err)
+
+	got := string(result)
+	assert.Contains(t, got, "skills:\n  - skill-a\n")
+	assert.Contains(t, got, "Body")
+	assertValidFrontmatter(t, result)
+}
+
 func TestInjectFrontmatterSkills_EmptySkillDirs(t *testing.T) {
 	t.Parallel()
 	src := `---
