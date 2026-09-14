@@ -3,6 +3,7 @@ package mintclient
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -874,6 +875,27 @@ func TestQueryStatus_AllMethodsFail(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "GitHub token") {
 		t.Errorf("error = %q, want to list GitHub token attempt", err.Error())
+	}
+}
+
+func TestQueryStatus_ResolveGitHubTokenErrors(t *testing.T) {
+	// No OIDC env vars, and resolveGitHubToken itself returns an error
+	// (as opposed to succeeding with an empty or rejected token).
+	origEnv := envLookup
+	envLookup = func(key string) string { return "" }
+	defer func() { envLookup = origEnv }()
+
+	_, _, err := QueryStatus(context.Background(), StatusRequest{
+		MintURL: "https://mint.example.com",
+	}, func() (string, error) { return "", fmt.Errorf("gh auth token: not logged in") })
+	if err == nil {
+		t.Fatal("expected error when resolveGitHubToken fails")
+	}
+	if !strings.Contains(err.Error(), "authentication failed") {
+		t.Errorf("error = %q, want to contain 'authentication failed'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "not logged in") {
+		t.Errorf("error = %q, want to list the resolveGitHubToken error", err.Error())
 	}
 }
 

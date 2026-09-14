@@ -1758,7 +1758,9 @@ Two modes of operation:
     Queries GET /v1/status on the mint service using auto-discovered
     GitHub-based authentication. Tries GitHub Actions OIDC first, then
     falls back to GH_TOKEN / GITHUB_TOKEN / gh auth token. No cloud
-    IAM required.
+    IAM required. The resolved credential (OIDC token or GitHub user
+    token) is sent as a bearer token to the --mint-url endpoint, so
+    only point this at a mint service you trust with that credential.
 
   --project:
     Reads mint state directly from GCP infrastructure (Cloud Function

@@ -3982,6 +3982,45 @@ func TestRunMintStatusAPI_Success(t *testing.T) {
 	assert.Contains(t, output, "fullsend-ai/fullsend")
 }
 
+func TestRunMintStatusAPI_OIDCPath(t *testing.T) {
+	oidcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"value": "oidc-jwt"})
+	}))
+	defer oidcSrv.Close()
+
+	statusSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/status" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer oidc-jwt" {
+			t.Errorf("Authorization = %q, want Bearer oidc-jwt", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"org":     "acme",
+			"roles":   []string{"coder"},
+			"version": "2.0.0",
+		})
+	}))
+	defer statusSrv.Close()
+
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", oidcSrv.URL)
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "request-token")
+
+	out := &strings.Builder{}
+	printer := ui.New(out)
+	err := runMintStatusAPI(context.Background(), printer, statusSrv.URL)
+	require.NoError(t, err)
+
+	output := out.String()
+	assert.Contains(t, output, "OIDC")
+	assert.Contains(t, output, "acme")
+	assert.Contains(t, output, "coder")
+	assert.Contains(t, output, "2.0.0")
+}
+
 func TestRunMintStatusAPI_AuthFailure(t *testing.T) {
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")

@@ -288,7 +288,7 @@ type StatusAuthMethod string
 
 const (
 	// StatusAuthOIDC indicates authentication via GitHub Actions OIDC.
-	StatusAuthOIDC StatusAuthMethod = "oidc"
+	StatusAuthOIDC StatusAuthMethod = "OIDC"
 	// StatusAuthGitHub indicates authentication via a GitHub user token
 	// (GH_TOKEN, GITHUB_TOKEN, or gh auth token).
 	StatusAuthGitHub StatusAuthMethod = "GitHub"
