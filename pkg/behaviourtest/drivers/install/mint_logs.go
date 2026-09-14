@@ -38,7 +38,10 @@ const (
 	mintLogFetchTimeout = 30 * time.Second
 
 	// mintLogEventLimit is the maximum number of events to request.
-	mintLogEventLimit = 10000
+	// The Telemetry Query API documents 2000 as the maximum allowed
+	// value for "limit"; requesting more (e.g. 10000) fails with
+	// HTTP 400 "limit too_big" and no artifact is written.
+	mintLogEventLimit = 2000
 
 	// cfTelemetryQueryPath is the Cloudflare Workers Observability
 	// Telemetry Query API endpoint path template. %s is the account
