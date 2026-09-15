@@ -73,8 +73,15 @@ var obsoleteGitLabWorkflowRules = []workflowRule{
 // fullsend's current entries; it only migrates away rules that are
 // strictly obsolete.
 //
+// An obsolete rule is only stripped when gitlabCIWorkflowIsFullsendOwned
+// finds positive evidence that fullsend, not the repo owner, installed
+// the workflow block — the obsolete condition
+// ($CI_PIPELINE_SOURCE == "merge_request_event") is GitLab's standard
+// MR-pipeline gate and repos commonly set it themselves.
+//
 // Returns the original content and changed=false when there is nothing
-// to strip (no workflow: block, no rules:, or no obsolete rule present).
+// to strip (no workflow: block, no rules:, no obsolete rule present, or
+// fullsend ownership of the block can't be established).
 func StripObsoleteGitLabWorkflowRules(existing []byte) (result []byte, changed bool, err error) {
 	if len(bytes.TrimSpace(existing)) == 0 {
 		return existing, false, nil
@@ -98,8 +105,12 @@ func StripObsoleteGitLabWorkflowRules(existing []byte) (result []byte, changed b
 		return existing, false, nil
 	}
 
-	rulesVal := findMappingValue(workflowVal, "rules")
-	if rulesVal == nil || rulesVal.Kind != yaml.SequenceNode {
+	rulesIdx := findMappingKeyIndex(workflowVal, "rules")
+	if rulesIdx < 0 {
+		return existing, false, nil
+	}
+	rulesVal := workflowVal.Content[rulesIdx+1]
+	if rulesVal.Kind != yaml.SequenceNode {
 		return existing, false, nil
 	}
 
@@ -108,26 +119,86 @@ func StripObsoleteGitLabWorkflowRules(existing []byte) (result []byte, changed b
 		obsolete[r.If] = true
 	}
 
+	hasObsolete := false
+	for _, item := range rulesVal.Content {
+		if item.Kind == yaml.MappingNode {
+			if v := findMappingValue(item, "if"); v != nil && obsolete[v.Value] {
+				hasObsolete = true
+				break
+			}
+		}
+	}
+	if !hasObsolete {
+		return existing, false, nil
+	}
+
+	// $CI_PIPELINE_SOURCE == "merge_request_event" is GitLab's standard
+	// MR-pipeline gate, not something unique to fullsend, and repos can
+	// (and do) set it themselves. Only strip it when there is positive
+	// evidence fullsend — not the repo owner — installed this workflow
+	// block; otherwise leave it untouched.
+	if !gitlabCIWorkflowIsFullsendOwned(workflowVal, rulesVal.Content) {
+		return existing, false, nil
+	}
+
 	var kept []*yaml.Node
 	for _, item := range rulesVal.Content {
 		if item.Kind == yaml.MappingNode {
 			if v := findMappingValue(item, "if"); v != nil && obsolete[v.Value] {
-				changed = true
 				continue
 			}
 		}
 		kept = append(kept, item)
 	}
-	if !changed {
-		return existing, false, nil
+	if len(kept) == 0 {
+		// Remove the rules: key entirely rather than leaving behind
+		// workflow.rules: []. GitLab treats a present-but-empty rules:
+		// as "never run", which would also block fullsend's own
+		// schedule- and API-triggered pipelines, not just MR
+		// pipelines. Mirrors removeWorkflowRules's teardown-path
+		// handling of the same case.
+		workflowVal.Content = append(
+			workflowVal.Content[:rulesIdx],
+			workflowVal.Content[rulesIdx+2:]...)
+	} else {
+		rulesVal.Content = kept
 	}
-	rulesVal.Content = kept
 
 	out, marshalErr := marshalNode(&doc)
 	if marshalErr != nil {
 		return nil, false, marshalErr
 	}
 	return out, true, nil
+}
+
+// gitlabCIWorkflowIsFullsendOwned reports whether a workflow: block shows
+// positive evidence that fullsend, rather than the repo owner, installed
+// it: either the workflow carries the fullsend-generated name (set by
+// newGitLabCI on fresh installs), or its rules already include fullsend's
+// full current required rule set (added by mergeWorkflowRules when
+// merging into a pre-existing file, which never sets workflow.name — see
+// newGitLabCI's doc comment). Absent either signal, the block cannot be
+// distinguished from one the repo owner configured independently.
+func gitlabCIWorkflowIsFullsendOwned(workflow *yaml.Node, rules []*yaml.Node) bool {
+	if nameVal := findMappingValue(workflow, "name"); nameVal != nil &&
+		strings.HasPrefix(nameVal.Value, fullsendWorkflowNamePrefix) {
+		return true
+	}
+
+	present := make(map[string]bool, len(rules))
+	for _, item := range rules {
+		if item.Kind == yaml.MappingNode {
+			if v := findMappingValue(item, "if"); v != nil {
+				present[v.Value] = true
+			}
+		}
+	}
+	for _, r := range fullsendWorkflowRules {
+		if !present[r.If] {
+			return false
+		}
+	}
+	return true
 }
 
 // HasFullsendEntries reports whether existing .gitlab-ci.yml content

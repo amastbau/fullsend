@@ -784,8 +784,27 @@ func TestStripObsoleteGitLabWorkflowRules_InvalidYAML(t *testing.T) {
 }
 
 func TestStripObsoleteGitLabWorkflowRules_PreservesUserRules(t *testing.T) {
+	// No workflow.name and none of fullsend's current required rules are
+	// present, so nothing marks this merge_request_event rule as
+	// fullsend-owned. It must survive untouched.
 	existing := []byte(`---
 workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+`)
+	result, changed, err := StripObsoleteGitLabWorkflowRules(existing)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Equal(t, existing, result)
+}
+
+func TestStripObsoleteGitLabWorkflowRules_StripsFullsendManagedRuleByName(t *testing.T) {
+	// workflow.name carries the fullsend-generated prefix, establishing
+	// provenance even without the current rule set present.
+	existing := []byte(`---
+workflow:
+  name: 'fullsend $CI_PIPELINE_SOURCE $STAGE $RESOURCE_KEY'
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
@@ -796,4 +815,45 @@ workflow:
 	s := string(result)
 	assert.NotContains(t, s, "merge_request_event")
 	assert.Contains(t, s, `$CI_COMMIT_BRANCH == "main"`)
+	assert.Contains(t, s, "fullsend $CI_PIPELINE_SOURCE $STAGE $RESOURCE_KEY")
+}
+
+func TestStripObsoleteGitLabWorkflowRules_StripsFullsendManagedRuleByRuleSet(t *testing.T) {
+	// No workflow.name (as on an already-enrolled repo merged via
+	// mergeWorkflowRules, which never sets it), but fullsend's full
+	// current required rule set is present alongside the obsolete rule,
+	// establishing provenance.
+	existing := []byte(`---
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"
+    - if: $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE
+`)
+	result, changed, err := StripObsoleteGitLabWorkflowRules(existing)
+	require.NoError(t, err)
+	require.True(t, changed)
+	s := string(result)
+	assert.NotContains(t, s, "merge_request_event")
+	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "schedule"`)
+	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "api"`)
+}
+
+func TestStripObsoleteGitLabWorkflowRules_RemovesEmptyRulesKey(t *testing.T) {
+	// The obsolete rule is the only entry in workflow.rules. Removing it
+	// must drop the rules: key entirely rather than leaving behind
+	// rules: [], which GitLab treats as "never run".
+	existing := []byte(`---
+workflow:
+  name: 'fullsend $CI_PIPELINE_SOURCE $STAGE $RESOURCE_KEY'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+`)
+	result, changed, err := StripObsoleteGitLabWorkflowRules(existing)
+	require.NoError(t, err)
+	require.True(t, changed)
+	s := string(result)
+	assert.NotContains(t, s, "merge_request_event")
+	assert.NotContains(t, s, "rules:")
+	assert.Contains(t, s, "fullsend $CI_PIPELINE_SOURCE $STAGE $RESOURCE_KEY")
 }
