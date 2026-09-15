@@ -2,19 +2,22 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/fullsend-ai/fullsend/internal/forge"
 	"github.com/fullsend-ai/fullsend/internal/forge/gitlab"
+	"github.com/fullsend-ai/fullsend/internal/poll"
 	"github.com/fullsend-ai/fullsend/internal/repos"
 	"github.com/fullsend-ai/fullsend/internal/ui"
 )
 
 const (
-	gitlabBotTokenName          = "fullsend-bot"
-	gitlabAccessLevelMaintainer = 40
+	gitlabBotTokenName         = "fullsend-bot"
+	gitlabAccessLevelDeveloper = 30
 )
 
 // setupGitLabBotToken creates a project access token for the fullsend bot
@@ -44,10 +47,12 @@ func setupGitLabBotToken(ctx context.Context, client forge.Client, glClient *git
 		}
 
 		expiresAt := time.Now().AddDate(1, 0, 0).Format("2006-01-02")
-		// "api" scope is required because the bot token is used for CI/CD variable
-		// management, pipeline schedule creation, and merge request operations.
+		// "api" scope is required because the bot token is used for package
+		// registry state, pipeline creation, and merge request operations.
+		// Developer (30) is sufficient now that poller state lives in the
+		// Generic Package Registry instead of CI/CD variables (#7313).
 		token, err := glClient.CreateProjectAccessToken(ctx, owner, repo, gitlabBotTokenName,
-			[]string{"api"}, gitlabAccessLevelMaintainer, expiresAt)
+			[]string{"api"}, gitlabAccessLevelDeveloper, expiresAt)
 		if err != nil {
 			printer.StepWarn(fmt.Sprintf("Project access token creation failed: %v", err))
 			if fallbackToken != "" {
@@ -76,7 +81,66 @@ func setupGitLabBotToken(ctx context.Context, client forge.Client, glClient *git
 		printer.StepDone("Bot credentials stored as protected CI/CD variable")
 	}
 
+	provisionGitLabDispatchSecret(ctx, client, printer, owner, repo)
+
 	return botPAT, nil
+}
+
+// provisionGitLabDispatchSecret ensures FULLSEND_DISPATCH_SECRET exists
+// (so poll-state and dispatch HMAC signing is on by default instead of
+// silently unsigned), migrates any pre-#7313 poller CI/CD variables into
+// the package registry, and re-signs a pre-#7317 unsigned state.json —
+// all while the caller's Maintainer-or-higher client can still read the
+// legacy variables, which the Developer-level bot PAT cannot.
+//
+// It is safe to run on both fresh installs and already-enrolled
+// (converged / already-current) repos: it never creates or revokes the
+// bot PAT, so it does not disturb live pipelines. Best-effort — failures
+// warn rather than fail the operation, matching the other GitLab setup
+// steps (duplicate-token cleanup, etc.).
+func provisionGitLabDispatchSecret(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) {
+	dispatchSecret, secretErr := ensureGitLabDispatchSecret(ctx, client, printer, owner, repo)
+	if secretErr != nil {
+		printer.StepWarn(fmt.Sprintf("Could not provision dispatch secret: %v", secretErr))
+		return
+	}
+	if seeded, seedErr := poll.SeedGitLabPollStateFromLegacyVars(ctx, client, owner, repo, dispatchSecret); seedErr != nil {
+		printer.StepWarn(fmt.Sprintf("Could not migrate legacy poller state: %v", seedErr))
+	} else if seeded {
+		printer.StepDone("Migrated legacy poller state to package registry")
+	}
+	if resigned, resignErr := poll.EnsureGitLabPollStateSigned(ctx, client, owner, repo, dispatchSecret); resignErr != nil {
+		printer.StepWarn(fmt.Sprintf("Could not sign existing poll state: %v", resignErr))
+	} else if resigned {
+		printer.StepDone("Signed existing poll state document")
+	}
+}
+
+// ensureGitLabDispatchSecret returns the project's existing
+// FULLSEND_DISPATCH_SECRET CI/CD variable value, or generates and
+// stores a new one (masked, protected, like the bot PAT) if none is
+// set. Without this, dispatch-variable and poll-state HMAC signing
+// (see ADR 0067 and PR #7317) require a manual operator step and
+// default to unsigned.
+func ensureGitLabDispatchSecret(ctx context.Context, client forge.Client, printer *ui.Printer, owner, repo string) (string, error) {
+	vars, err := client.ListRepoVariables(ctx, owner, repo)
+	if err != nil {
+		return "", fmt.Errorf("listing repo variables: %w", err)
+	}
+	if existing, ok := vars[forge.SecretDispatch]; ok && existing != "" {
+		return existing, nil
+	}
+
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating dispatch secret: %w", err)
+	}
+	secret := hex.EncodeToString(buf)
+	if err := client.CreateRepoSecret(ctx, owner, repo, forge.SecretDispatch, secret); err != nil {
+		return "", fmt.Errorf("storing dispatch secret: %w", err)
+	}
+	printer.StepDone("Provisioned FULLSEND_DISPATCH_SECRET (protected, masked)")
+	return secret, nil
 }
 
 // setupGitLabPipelineSchedules creates two independent pipeline schedules

@@ -106,6 +106,46 @@ Accepted
 > `fullsend-dispatch.yml`, and "MR review latency is unaffected" under
 > Consequences. Push-to-open-MR (GitHub `synchronize`) is not detected
 > by the poller; use `/fs-review`.
+>
+> **Update (2026-09, #7313):** Poller state (watermarks, label state,
+> dispatched keys, and failed-event retry counts) moved from CI/CD
+> variables to the GitLab Generic Package Registry at
+> `fullsend-poll-state/1.0/state.json`. Developer role (access level 30)
+> is sufficient for the bot PAT at runtime. Maintainer (40) is no longer
+> required because the poller no longer writes CI/CD variables. Install-
+> time setup still requires a Maintainer-level human to create the
+> project access token and store `FULLSEND_FORGE_TOKEN`. Superseded:
+> "Credential model" Maintainer requirement, `UpdateCIVariable` under
+> Forge abstraction (poller state), and the CI/CD-variable watermark
+> names in "Cron poller".
+>
+> This changes the threat model for Risk 3 ("Watermark tampering") and
+> the "Security properties of the credential model" table below, both of
+> which still describe watermark tampering as Maintainer-only and fully
+> mitigated by protected-variable status. That mitigation does not apply
+> to a Generic Package Registry file: the new threat actor is anyone
+> with Developer-level `api`-scoped access (or, depending on job-token
+> settings, `CI_JOB_TOKEN` from an unprotected-branch job), and the new
+> asset is `fullsend-poll-state/1.0/state.json` rather than a protected
+> CI/CD variable. The mitigation is HMAC-SHA256 signing of the state
+> document with `FULLSEND_DISPATCH_SECRET` (`internal/poll/state.go`),
+> the same shared secret used for dispatch-variable signing. GitLab
+> `repos install` **and** `repos converge` auto-provision it as a
+> masked, protected CI/CD variable if one is not already set
+> (`ensureGitLabDispatchSecret`/`provisionGitLabDispatchSecret` in
+> `internal/cli/repos_gitlab.go`) — including for already-enrolled repos
+> and without revoking the live bot PAT — so signing is on by default on
+> every enrolled repo, and the secret is treated as a managed variable
+> (excluded from orphan detection). The poller **fails closed** when the
+> secret is unset: `loadPollState`/`savePollState` refuse to read or
+> write unsigned poll state, so Developer-level tampering can never be
+> silently trusted — a missing secret aborts the poll cycle instead. To
+> keep upgrades safe, a pre-#7317 unsigned `state.json` is re-signed in
+> place during install/converge while the operator's Maintainer-level
+> client is available (`EnsureGitLabPollStateSigned`), preserving its
+> watermarks and dispatch history rather than resetting them. Superseded:
+> Risk 3 and the credential-model table's characterization of watermark
+> tampering as a fully-mitigated, Maintainer-only risk.
 
 ## Context
 
