@@ -188,6 +188,26 @@ func TestGitLabDispatchContent(t *testing.T) {
 	assert.NotContains(t, s, "fullsend-${STAGE}.yml")
 }
 
+// TestGitLabDispatchNoOpJobsHaveImage guards the custom-runner contract:
+// GitLab populates CUSTOM_ENV_CI_JOB_IMAGE from the job's image: field, and
+// the runner's prepare.sh fails if it is unset. No-op child pipelines are
+// tagged onto that runner, so every inline no-op YAML must set an image.
+func TestGitLabDispatchNoOpJobsHaveImage(t *testing.T) {
+	content, err := GitLabPerRepoFile(".gitlab/ci/fullsend-dispatch.yml")
+	require.NoError(t, err)
+
+	var count int
+	for _, line := range strings.Split(string(content), "\n") {
+		if !strings.Contains(line, "echo 'no-op:") {
+			continue
+		}
+		count++
+		assert.Contains(t, line, `image: "alpine:3"`,
+			"no-op child job must set image so the custom runner can prepare the job: %s", line)
+	}
+	assert.Equal(t, 7, count, "expected 7 no-op YAML fragments in fullsend-dispatch.yml")
+}
+
 func TestGitLabAgentTemplateContent(t *testing.T) {
 	content, err := GitLabPerRepoFile(".gitlab/ci/fullsend-agent.yml")
 	require.NoError(t, err)
