@@ -176,6 +176,7 @@ mint-cf-worker-test: wasm-stage
 
 lint-md-links: lint-docs-anchors
 	lychee --offline --no-progress --exclude-path node_modules --exclude-path experiments --exclude-path docs/archived-roadmaps/2026-07.md '**/*.md'
+	lychee --offline --no-progress --include-fragments --exclude-path node_modules --exclude-path experiments --exclude-path '^docs/' '**/*.md'
 
 lint-docs-anchors:
 	./hack/lint-docs-anchors
