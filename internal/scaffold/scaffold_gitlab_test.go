@@ -190,8 +190,12 @@ func TestGitLabDispatchContent(t *testing.T) {
 
 // TestGitLabDispatchNoOpJobsHaveImage guards the custom-runner contract:
 // GitLab populates CUSTOM_ENV_CI_JOB_IMAGE from the job's image: field, and
-// the runner's prepare.sh fails if it is unset. No-op child pipelines are
-// tagged onto that runner, so every inline no-op YAML must set an image.
+// the runner's prepare.sh fails if it is unset. Beyond that, prepare.sh also
+// probes the image for an `openshell` binary (ensure_job_openshell_gateway)
+// and aborts if the probe fails, so the image must be openshell-capable —
+// not just present. No-op child pipelines are tagged onto that runner, so
+// every inline no-op YAML must set the same openshell-capable image the
+// parent `dispatch` job uses.
 func TestGitLabDispatchNoOpJobsHaveImage(t *testing.T) {
 	content, err := GitLabPerRepoFile(".gitlab/ci/fullsend-dispatch.yml")
 	require.NoError(t, err)
@@ -202,8 +206,8 @@ func TestGitLabDispatchNoOpJobsHaveImage(t *testing.T) {
 			continue
 		}
 		count++
-		assert.Contains(t, line, `image: "alpine:3"`,
-			"no-op child job must set image so the custom runner can prepare the job: %s", line)
+		assert.Contains(t, line, `image: "ghcr.io/fullsend-ai/fullsend-runner:dev"`,
+			"no-op child job must set an openshell-capable image so the custom runner can prepare the job: %s", line)
 	}
 	assert.Equal(t, 7, count, "expected 7 no-op YAML fragments in fullsend-dispatch.yml")
 }
