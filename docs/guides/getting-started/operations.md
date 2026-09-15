@@ -57,7 +57,7 @@ For manifest-managed installations (including GitLab repos), use `repos install`
 fullsend repos install -f repos.yaml
 ```
 
-This is idempotent — it provisions new repos, repairs missing or drifted components (workflow, thin callers, variables, secrets, pipeline schedules), repairs scaffold content drift, and upgrades workflow refs. Variables with manifest-specified values (e.g. mint URL, GCP region, review app client ID) are checked for value drift; secrets and runtime-mutated variables are checked for presence only.
+This is idempotent — it provisions new repos, repairs missing or drifted components (workflow, thin callers, variables, secrets, pipeline schedules), repairs scaffold content drift, and upgrades workflow refs. Variables with manifest-specified values (e.g. mint URL, GCP region, review app client ID) are checked for value drift; secrets and runtime-mutated variables are checked for presence only. For GitLab repos, converge also migrates the root `.gitlab-ci.yml`: an obsolete `merge_request_event` workflow rule left over from installs predating the removal of native MR dispatch (#7322) is stripped automatically, without disturbing any other fullsend or user-owned entries in the file.
 
 ## Uninstalling
 

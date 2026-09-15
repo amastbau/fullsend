@@ -120,6 +120,20 @@ Accepted
 > wrapper. Superseded sections: the two-path Decision, the native-CI
 > architecture-diagram line, and "MR review latency is unaffected"
 > under Consequences.
+>
+> **Transitional risk on already-enrolled repos:** the root
+> `.gitlab-ci.yml` is user-owned and, prior to this note, was only
+> touched by the install merge path (fresh installs) and the uninstall
+> unmerge path (teardown) — neither runs during `repos upgrade`/`repos
+> install` convergence. Without a migration, an already-enrolled repo
+> that converges after #7322 would keep the obsolete
+> `merge_request_event` workflow rule while the newly-synced pipeline
+> wrapper defines no job matching that source, so GitLab would create
+> an empty/config-error pipeline on every MR event. Converge now
+> strips this specific obsolete rule from the root file in place
+> (`StripObsoleteGitLabWorkflowRules`, `internal/repos/gitlabci.go`),
+> leaving fullsend's current rules and all user configuration
+> untouched. See risk item 6 under Consequences.
 
 ## Context
 
@@ -573,6 +587,15 @@ methods rather than adding forge-conditional logic.
 5. **Missed events from API quirks.** The Notes API lacks `created_after`; the
    Events API `after` parameter is date-only. Mitigated by 30-second watermark
    overlap and dual-frequency polling as reconciliation.
+6. **Stale root-file workflow rules surviving convergence (#7322).** The root
+   `.gitlab-ci.yml` is user-owned and historically was only migrated on
+   fresh install or full uninstall, not on `repos upgrade`/`repos install`
+   convergence. An obsolete rule (e.g. `merge_request_event`, removed in
+   #7322) could otherwise survive indefinitely on already-enrolled repos,
+   producing an empty/config-error pipeline on every matching event.
+   Mitigated by a converge-time migration step that strips only the
+   specific obsolete rule(s), leaving current fullsend rules and user
+   configuration untouched.
 
 **Comparison with GitHub:**
 

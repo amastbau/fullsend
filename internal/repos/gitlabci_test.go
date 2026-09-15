@@ -713,3 +713,87 @@ build:
 	assert.Contains(t, s, "- poll")
 	assert.Contains(t, s, "- agent")
 }
+
+func TestStripObsoleteGitLabWorkflowRules_RemovesObsoleteRule(t *testing.T) {
+	existing := []byte(`---
+include:
+  - local: '.gitlab/ci/fullsend-pipeline.yml'
+
+workflow:
+  name: 'fullsend $CI_PIPELINE_SOURCE $STAGE $RESOURCE_KEY'
+  auto_cancel:
+    on_new_commit: none
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"
+    - if: $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE
+`)
+	result, changed, err := StripObsoleteGitLabWorkflowRules(existing)
+	require.NoError(t, err)
+	require.True(t, changed)
+	s := string(result)
+
+	assert.NotContains(t, s, `merge_request_event`)
+	// Current fullsend rules, name, and auto_cancel are preserved.
+	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "schedule"`)
+	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "api"`)
+	assert.Contains(t, s, "fullsend $CI_PIPELINE_SOURCE $STAGE $RESOURCE_KEY")
+	assert.Contains(t, s, "on_new_commit: none")
+	assert.Contains(t, s, "fullsend-pipeline.yml")
+}
+
+func TestStripObsoleteGitLabWorkflowRules_NoObsoleteRule(t *testing.T) {
+	existing := []byte(`---
+include:
+  - local: '.gitlab/ci/fullsend-pipeline.yml'
+
+workflow:
+  auto_cancel:
+    on_new_commit: none
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"
+    - if: $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE
+`)
+	result, changed, err := StripObsoleteGitLabWorkflowRules(existing)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Equal(t, existing, result)
+}
+
+func TestStripObsoleteGitLabWorkflowRules_NoWorkflowBlock(t *testing.T) {
+	existing := []byte(`---
+stages:
+  - build
+`)
+	result, changed, err := StripObsoleteGitLabWorkflowRules(existing)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Equal(t, existing, result)
+}
+
+func TestStripObsoleteGitLabWorkflowRules_EmptyFile(t *testing.T) {
+	result, changed, err := StripObsoleteGitLabWorkflowRules(nil)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Nil(t, result)
+}
+
+func TestStripObsoleteGitLabWorkflowRules_InvalidYAML(t *testing.T) {
+	_, _, err := StripObsoleteGitLabWorkflowRules([]byte("not: valid: yaml: [["))
+	require.Error(t, err)
+}
+
+func TestStripObsoleteGitLabWorkflowRules_PreservesUserRules(t *testing.T) {
+	existing := []byte(`---
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+`)
+	result, changed, err := StripObsoleteGitLabWorkflowRules(existing)
+	require.NoError(t, err)
+	require.True(t, changed)
+	s := string(result)
+	assert.NotContains(t, s, "merge_request_event")
+	assert.Contains(t, s, `$CI_COMMIT_BRANCH == "main"`)
+}

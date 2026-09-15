@@ -53,6 +53,83 @@ type workflowRule struct {
 	If string
 }
 
+// obsoleteGitLabWorkflowRules are workflow:rules entries that previous
+// fullsend versions installed into the root .gitlab-ci.yml but that are
+// no longer part of the current contract. Native merge_request_event
+// dispatch was removed in #7322; on an already-enrolled repo, this rule
+// otherwise survives `repos upgrade`/`repos install` convergence forever
+// because the install merge path only runs on fresh installs and the
+// uninstall unmerge path only runs on teardown. StripObsoleteGitLabWorkflowRules
+// uses this list to migrate already-enrolled repos in place.
+var obsoleteGitLabWorkflowRules = []workflowRule{
+	{If: `$CI_PIPELINE_SOURCE == "merge_request_event"`},
+}
+
+// StripObsoleteGitLabWorkflowRules removes obsolete fullsend workflow:rules
+// entries (see obsoleteGitLabWorkflowRules) from an existing .gitlab-ci.yml,
+// leaving everything else — including fullsend's current rules, the
+// workflow name, auto_cancel settings, and any user configuration —
+// untouched. Unlike UnmergeGitLabCI (full teardown) this never removes
+// fullsend's current entries; it only migrates away rules that are
+// strictly obsolete.
+//
+// Returns the original content and changed=false when there is nothing
+// to strip (no workflow: block, no rules:, or no obsolete rule present).
+func StripObsoleteGitLabWorkflowRules(existing []byte) (result []byte, changed bool, err error) {
+	if len(bytes.TrimSpace(existing)) == 0 {
+		return existing, false, nil
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(existing, &doc); err != nil {
+		return nil, false, fmt.Errorf("parsing .gitlab-ci.yml: %w", err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return existing, false, nil
+	}
+
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return existing, false, nil
+	}
+
+	workflowVal := findMappingValue(root, "workflow")
+	if workflowVal == nil || workflowVal.Kind != yaml.MappingNode {
+		return existing, false, nil
+	}
+
+	rulesVal := findMappingValue(workflowVal, "rules")
+	if rulesVal == nil || rulesVal.Kind != yaml.SequenceNode {
+		return existing, false, nil
+	}
+
+	obsolete := make(map[string]bool, len(obsoleteGitLabWorkflowRules))
+	for _, r := range obsoleteGitLabWorkflowRules {
+		obsolete[r.If] = true
+	}
+
+	var kept []*yaml.Node
+	for _, item := range rulesVal.Content {
+		if item.Kind == yaml.MappingNode {
+			if v := findMappingValue(item, "if"); v != nil && obsolete[v.Value] {
+				changed = true
+				continue
+			}
+		}
+		kept = append(kept, item)
+	}
+	if !changed {
+		return existing, false, nil
+	}
+	rulesVal.Content = kept
+
+	out, marshalErr := marshalNode(&doc)
+	if marshalErr != nil {
+		return nil, false, marshalErr
+	}
+	return out, true, nil
+}
+
 // HasFullsendEntries reports whether existing .gitlab-ci.yml content
 // already contains all fullsend CI entries. It performs semantic drift
 // detection by checking:
