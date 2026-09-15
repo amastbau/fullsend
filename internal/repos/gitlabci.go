@@ -31,7 +31,17 @@ var fullsendStages = []string{"dispatch", "poll", "agent"}
 // fullsendWorkflowRules are the workflow:rules entries that fullsend
 // requires in the root .gitlab-ci.yml. GitLab does not merge workflow:
 // definitions across includes, so these must be in the root file.
+// Native merge_request_event dispatch was removed in #7322; all events
+// route through the cron poller (schedule) and API-triggered agent jobs.
 var fullsendWorkflowRules = []workflowRule{
+	{If: `$CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"`},
+	{If: `$CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE`},
+}
+
+// unmergeWorkflowRules are removed on uninstall. Includes the current
+// required rules plus the obsolete native-MR-dispatch rule previously
+// installed by fullsend (#7322).
+var unmergeWorkflowRules = []workflowRule{
 	{If: `$CI_PIPELINE_SOURCE == "merge_request_event"`},
 	{If: `$CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"`},
 	{If: `$CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE`},
@@ -51,7 +61,7 @@ type workflowRule struct {
 //  2. If stages: exists, it contains dispatch, poll, agent
 //     (if no stages: key, the included pipeline provides them)
 //  3. If workflow: exists, it must have a rules: sequence containing
-//     fullsend's three if: conditions. If workflow: exists without
+//     fullsend's if: conditions. If workflow: exists without
 //     rules:, that is drift — MergeGitLabCI would add them.
 //     (if no workflow: block at all, fullsend's jobs self-filter)
 //
@@ -237,7 +247,6 @@ workflow:
   auto_cancel:
     on_new_commit: none
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"
     - if: $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE
 `
@@ -522,9 +531,10 @@ func removeWorkflowRules(root *yaml.Node) {
 		return
 	}
 
-	// Build a set of fullsend rule conditions for matching.
+	// Build a set of fullsend rule conditions for matching, including
+	// obsolete rules previously installed by fullsend.
 	fsRules := make(map[string]bool)
-	for _, r := range fullsendWorkflowRules {
+	for _, r := range unmergeWorkflowRules {
 		fsRules[r.If] = true
 	}
 

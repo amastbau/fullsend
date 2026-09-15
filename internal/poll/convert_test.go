@@ -413,6 +413,51 @@ func TestToNormalizedEvent_MREventOpenedActorFallback(t *testing.T) {
 	}
 }
 
+func TestToNormalizedEvent_MREventClosed(t *testing.T) {
+	mc := newMockClient()
+	mc.memberLevel[10] = 40 // Maintainer -> "maintain"
+	mc.projectPaths[1] = "group/project"
+	p := newEventsPoller(mc)
+
+	event := RoutableEvent{
+		Type:            "mr_event",
+		Action:          "closed",
+		IID:             9,
+		NoteAuthorID:    10,
+		NoteAuthorLogin: "closer-user",
+		IsBot:           false,
+		MRSource:        1,
+		MRTarget:        1,
+		MRAuthorID:      42,
+		MRAuthorLogin:   "dev-user",
+		SourceBranch:    "feature",
+		TargetBranch:    "main",
+	}
+
+	ne, authorID, err := p.toNormalizedEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if authorID != 10 {
+		t.Errorf("authorID = %d, want 10", authorID)
+	}
+	if ne.Transition.Kind != "closed" {
+		t.Errorf("Transition.Kind = %q, want %q", ne.Transition.Kind, "closed")
+	}
+	if ne.Source.RawAction != "closed" {
+		t.Errorf("Source.RawAction = %q, want %q", ne.Source.RawAction, "closed")
+	}
+	if ne.Actor.ID != "closer-user" {
+		t.Errorf("Actor.ID = %q, want %q", ne.Actor.ID, "closer-user")
+	}
+	if ne.Actor.Role != "maintain" {
+		t.Errorf("Actor.Role = %q, want %q", ne.Actor.Role, "maintain")
+	}
+	if ne.State.ChangeProposal == nil {
+		t.Fatal("expected State.ChangeProposal to be set for closed mr_event")
+	}
+}
+
 func TestToNormalizedEvent_UnresolvableActorError(t *testing.T) {
 	mc := newMockClient()
 	p := newEventsPoller(mc)
@@ -445,6 +490,7 @@ func TestTranslateEventType(t *testing.T) {
 		{name: "mr_note", event: RoutableEvent{Type: "mr_note"}, want: "comment_added"},
 		{name: "mr_event merged", event: RoutableEvent{Type: "mr_event"}, want: "merged"},
 		{name: "mr_event opened", event: RoutableEvent{Type: "mr_event", Action: "opened"}, want: "opened"},
+		{name: "mr_event closed", event: RoutableEvent{Type: "mr_event", Action: "closed"}, want: "closed"},
 		{name: "unknown", event: RoutableEvent{Type: "unknown"}, want: "unknown"},
 	}
 	for _, tt := range tests {
@@ -707,6 +753,7 @@ func TestMapRawAction(t *testing.T) {
 		{name: "mr_note", event: RoutableEvent{Type: "mr_note"}, want: "commented"},
 		{name: "mr_event merged", event: RoutableEvent{Type: "mr_event"}, want: "merged"},
 		{name: "mr_event opened", event: RoutableEvent{Type: "mr_event", Action: "opened"}, want: "opened"},
+		{name: "mr_event closed", event: RoutableEvent{Type: "mr_event", Action: "closed"}, want: "closed"},
 		{name: "unknown", event: RoutableEvent{Type: "unknown"}, want: ""},
 	}
 	for _, tt := range tests {

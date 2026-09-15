@@ -271,6 +271,220 @@ func TestDiscoverAllEvents_MROpenedAndMergedSameWindow(t *testing.T) {
 	}
 }
 
+func TestDiscoverAllEvents_MRClosedEvents(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-time.Minute)
+	mc := newMockClient()
+	mc.mrs = []MergeRequest{
+		{
+			IID:             12,
+			State:           "closed",
+			ClosedAt:        now,
+			UpdatedAt:       now,
+			Author:          UserRef{ID: 42, Username: "alice"},
+			ClosedBy:        UserRef{ID: 10, Username: "bob", Bot: false},
+			SourceProjectID: 1,
+			TargetProjectID: 1,
+			SourceBranch:    "feature",
+			TargetBranch:    "main",
+		},
+	}
+	mc.mrNotes[12] = []Note{}
+
+	p := newEventsPoller(mc)
+	events, _, _, err := p.discoverAllEvents(context.Background(), "group", "project", since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var closed []RoutableEvent
+	for _, e := range events {
+		if e.Type == "mr_event" && e.Action == "closed" {
+			closed = append(closed, e)
+		}
+	}
+	if len(closed) != 1 {
+		t.Fatalf("expected 1 closed mr_event, got %d", len(closed))
+	}
+	got := closed[0]
+	if got.IID != 12 {
+		t.Errorf("IID = %d, want 12", got.IID)
+	}
+	if got.NoteAuthorID != 10 {
+		t.Errorf("NoteAuthorID (closer) = %d, want 10", got.NoteAuthorID)
+	}
+	if got.NoteAuthorLogin != "bob" {
+		t.Errorf("NoteAuthorLogin = %q, want bob", got.NoteAuthorLogin)
+	}
+	if got.UpdatedAt != now {
+		t.Errorf("UpdatedAt = %v, want %v", got.UpdatedAt, now)
+	}
+}
+
+func TestDiscoverAllEvents_MRClosedIgnoresMerged(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-time.Minute)
+	mc := newMockClient()
+	mc.mrs = []MergeRequest{
+		{
+			IID:             13,
+			State:           "merged",
+			MergedAt:        now,
+			ClosedAt:        now, // GitLab may also set closed_at on merge
+			UpdatedAt:       now,
+			Author:          UserRef{ID: 42, Username: "alice"},
+			MergedBy:        UserRef{ID: 10, Username: "bob"},
+			ClosedBy:        UserRef{ID: 10, Username: "bob"},
+			SourceProjectID: 1,
+			TargetProjectID: 1,
+		},
+	}
+	mc.mrNotes[13] = []Note{}
+
+	p := newEventsPoller(mc)
+	events, _, _, err := p.discoverAllEvents(context.Background(), "group", "project", since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var closed, merged int
+	for _, e := range events {
+		if e.Type != "mr_event" {
+			continue
+		}
+		switch e.Action {
+		case "closed":
+			closed++
+		case "":
+			merged++
+		}
+	}
+	if closed != 0 {
+		t.Errorf("closed events = %d, want 0 (merged MRs must not emit closed)", closed)
+	}
+	if merged != 1 {
+		t.Errorf("merged events = %d, want 1", merged)
+	}
+}
+
+func TestDiscoverAllEvents_MRClosedIgnoresOldClosedAt(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-time.Minute)
+	mc := newMockClient()
+	mc.mrs = []MergeRequest{
+		{
+			IID:             14,
+			State:           "closed",
+			ClosedAt:        since.Add(-time.Hour),
+			UpdatedAt:       now, // listed because of a later comment
+			Author:          UserRef{ID: 42, Username: "alice"},
+			ClosedBy:        UserRef{ID: 10, Username: "bob"},
+			SourceProjectID: 1,
+			TargetProjectID: 1,
+		},
+	}
+	mc.mrNotes[14] = []Note{}
+
+	p := newEventsPoller(mc)
+	events, _, _, err := p.discoverAllEvents(context.Background(), "group", "project", since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, e := range events {
+		if e.Type == "mr_event" {
+			t.Fatalf("unexpected mr_event for old ClosedAt: %+v", e)
+		}
+	}
+}
+
+func TestDiscoverAllEvents_MRClosedFallsBackToAuthor(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-time.Minute)
+	mc := newMockClient()
+	mc.mrs = []MergeRequest{
+		{
+			IID:             15,
+			State:           "closed",
+			ClosedAt:        now,
+			UpdatedAt:       now,
+			Author:          UserRef{ID: 42, Username: "alice"},
+			SourceProjectID: 1,
+			TargetProjectID: 1,
+		},
+	}
+	mc.mrNotes[15] = []Note{}
+
+	p := newEventsPoller(mc)
+	events, _, _, err := p.discoverAllEvents(context.Background(), "group", "project", since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var closed []RoutableEvent
+	for _, e := range events {
+		if e.Type == "mr_event" && e.Action == "closed" {
+			closed = append(closed, e)
+		}
+	}
+	if len(closed) != 1 {
+		t.Fatalf("expected 1 closed mr_event, got %d", len(closed))
+	}
+	if closed[0].NoteAuthorID != 42 {
+		t.Errorf("NoteAuthorID = %d, want 42 (author fallback)", closed[0].NoteAuthorID)
+	}
+	if closed[0].NoteAuthorLogin != "alice" {
+		t.Errorf("NoteAuthorLogin = %q, want alice", closed[0].NoteAuthorLogin)
+	}
+}
+
+func TestDiscoverAllEvents_MROpenedAndClosedSameWindow(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-time.Minute)
+	mc := newMockClient()
+	mc.mrs = []MergeRequest{
+		{
+			IID:             16,
+			State:           "closed",
+			CreatedAt:       now.Add(-30 * time.Second),
+			ClosedAt:        now,
+			UpdatedAt:       now,
+			Author:          UserRef{ID: 42, Username: "alice"},
+			ClosedBy:        UserRef{ID: 10, Username: "bob"},
+			SourceProjectID: 1,
+			TargetProjectID: 1,
+		},
+	}
+	mc.mrNotes[16] = []Note{}
+
+	p := newEventsPoller(mc)
+	events, _, _, err := p.discoverAllEvents(context.Background(), "group", "project", since)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var opened, closed int
+	for _, e := range events {
+		if e.Type != "mr_event" {
+			continue
+		}
+		switch e.Action {
+		case "opened":
+			opened++
+		case "closed":
+			closed++
+		default:
+			t.Errorf("unexpected Action %q", e.Action)
+		}
+	}
+	if opened != 1 {
+		t.Errorf("opened events = %d, want 1", opened)
+	}
+	if closed != 1 {
+		t.Errorf("closed events = %d, want 1", closed)
+	}
+}
+
 func TestDiscoverAllEvents_MRNotes(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	since := now.Add(-time.Minute)
@@ -668,6 +882,26 @@ func TestFilterBotEvents_RetainsBotOpenedMR(t *testing.T) {
 	}
 }
 
+func TestFilterBotEvents_RetainsBotClosedMR(t *testing.T) {
+	mc := newMockClient()
+	p := newEventsPoller(mc) // botUserID = 100
+
+	events := []RoutableEvent{
+		{
+			Type:         "mr_event",
+			Action:       "closed",
+			IID:          8,
+			IsBot:        true,
+			NoteAuthorID: 100,
+			MRAuthorID:   42,
+		},
+	}
+	filtered := p.filterBotEvents(events)
+	if len(filtered) != 1 {
+		t.Fatalf("expected bot-closed MR to be retained, got %d events", len(filtered))
+	}
+}
+
 func TestFilterBotEvents_RemovesBotMergedMR(t *testing.T) {
 	mc := newMockClient()
 	p := newEventsPoller(mc)
@@ -843,12 +1077,22 @@ func TestDiscoverAllEvents_DefaultModeKeepsSlashCommands(t *testing.T) {
 func TestRoutableEventKey_OpenedDistinctFromMerged(t *testing.T) {
 	ts := time.Unix(1_700_000_000, 0)
 	opened := RoutableEvent{Type: "mr_event", Action: "opened", IID: 5, UpdatedAt: ts}
+	closed := RoutableEvent{Type: "mr_event", Action: "closed", IID: 5, UpdatedAt: ts}
 	merged := RoutableEvent{Type: "mr_event", IID: 5, UpdatedAt: ts}
 	if opened.Key() == merged.Key() {
 		t.Fatalf("opened and merged keys collided: %s", opened.Key())
 	}
+	if opened.Key() == closed.Key() {
+		t.Fatalf("opened and closed keys collided: %s", opened.Key())
+	}
+	if closed.Key() == merged.Key() {
+		t.Fatalf("closed and merged keys collided: %s", closed.Key())
+	}
 	if want := "mr_event-5-opened-1700000000"; opened.Key() != want {
 		t.Errorf("opened key = %q, want %q", opened.Key(), want)
+	}
+	if want := "mr_event-5-closed-1700000000"; closed.Key() != want {
+		t.Errorf("closed key = %q, want %q", closed.Key(), want)
 	}
 	if want := "mr_event-5-1700000000"; merged.Key() != want {
 		t.Errorf("merged key = %q, want %q", merged.Key(), want)

@@ -17,7 +17,8 @@ func TestMergeGitLabCI_NoExistingFile(t *testing.T) {
 	assert.Contains(t, s, "workflow:")
 	assert.Contains(t, s, "auto_cancel:")
 	assert.Contains(t, s, "on_new_commit: none")
-	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "merge_request_event"`)
+	assert.NotContains(t, s, `$CI_PIPELINE_SOURCE == "merge_request_event"`,
+		"native MR dispatch was removed in #7322")
 	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "schedule"`)
 	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "api"`)
 }
@@ -353,8 +354,9 @@ workflow:
 
 	// Workflow name preserved.
 	assert.Contains(t, s, "my project")
-	// Rules added.
-	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "merge_request_event"`)
+	// Rules added (native MR dispatch removed in #7322).
+	assert.NotContains(t, s, `$CI_PIPELINE_SOURCE == "merge_request_event"`)
+	assert.Contains(t, s, `$CI_PIPELINE_SOURCE == "schedule"`)
 	// auto_cancel added.
 	assert.Contains(t, s, "auto_cancel:")
 }
@@ -573,6 +575,27 @@ func TestHasFullsendEntries_NoStagesKey(t *testing.T) {
 	yaml := `---
 include:
   - local: '.gitlab/ci/fullsend-pipeline.yml'
+`
+	assert.True(t, HasFullsendEntries([]byte(yaml)))
+}
+
+func TestHasFullsendEntries_WithoutObsoleteMRRule(t *testing.T) {
+	// After #7322, merge_request_event is no longer required.
+	yaml := `---
+include:
+  - local: '.gitlab/ci/fullsend-pipeline.yml'
+
+stages:
+  - dispatch
+  - poll
+  - agent
+
+workflow:
+  auto_cancel:
+    on_new_commit: none
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"
+    - if: $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE
 `
 	assert.True(t, HasFullsendEntries([]byte(yaml)))
 }

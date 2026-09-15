@@ -106,6 +106,20 @@ Accepted
 > `fullsend-dispatch.yml`, and "MR review latency is unaffected" under
 > Consequences. Push-to-open-MR (GitHub `synchronize`) is not detected
 > by the poller; use `/fs-review`.
+>
+> **Update (2026-09, #7322):** Native `merge_request_event` dispatch is
+> removed. After #7293 moved MR-open review to the poller, the only
+> remaining native path was best-effort `closed` → retro (a
+> push-then-close race that generated no-op child pipelines for every
+> other MR event). All GitLab events now route through the cron poller,
+> including closed-unmerged MRs (`closed_at` > watermark and `merged_at`
+> empty → `transition.kind: closed` → retro). This is Option 4 (pure
+> cron-polling), originally rejected for sub-second MR review latency
+> that #7293 already gave up. `fullsend-dispatch.yml` is retained as a
+> version-marker carrier and is no longer included by the pipeline
+> wrapper. Superseded sections: the two-path Decision, the native-CI
+> architecture-diagram line, and "MR review latency is unaffected"
+> under Consequences.
 
 ## Context
 
@@ -358,6 +372,7 @@ configuration.
 | ~~MR opened/updated/reopened~~ | ~~Native CI (`merge_request_event`)~~ | ~~review~~ Moved to cron poll in [#7293](https://github.com/fullsend-ai/fullsend/issues/7293) — protected CI/CD variables are not exposed on unprotected MR refs |
 | MR opened | Cron poll (MR `created_at` > watermark) | review |
 | MR merged | Cron poll (MR `merged_at` > watermark) | retro |
+| MR closed (unmerged) | Cron poll (MR `closed_at` > watermark, `merged_at` empty) | retro |
 | MR note with `<!-- fullsend:changes-requested -->` | Cron poll (note body marker) | fix (same-project MRs only) |
 
 Bot-authored comments are skipped to prevent re-triggering loops (exception:

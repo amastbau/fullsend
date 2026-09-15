@@ -99,11 +99,11 @@ func (p *Poller) discoverAllEvents(ctx context.Context, owner, repo string, sinc
 	}
 
 	for _, mr := range mrs {
-		// MR-open review cannot run on native merge_request_event
-		// pipelines: those use the unprotected MR ref, so protected
-		// CI/CD variables (FULLSEND_FORGE_TOKEN) are empty. Detect
-		// newly created MRs here so review dispatches from the
-		// poller on the protected default branch.
+		// MR lifecycle events dispatch from the poller on the
+		// protected default branch. Native merge_request_event
+		// pipelines use the unprotected MR ref, so protected
+		// CI/CD variables (FULLSEND_FORGE_TOKEN) are empty (#7293,
+		// #7322).
 		if !mr.CreatedAt.IsZero() && mr.CreatedAt.After(since) {
 			events = append(events, RoutableEvent{
 				Type:            "mr_event",
@@ -140,6 +140,32 @@ func (p *Poller) discoverAllEvents(ctx context.Context, owner, repo string, sinc
 				MRAuthorID:      mr.Author.ID,
 				MRAuthorLogin:   mr.Author.Username,
 				MergedByLogin:   mergedBy.Username,
+			})
+		}
+
+		// Closed-unmerged: GitLab sets closed_at when an MR is closed
+		// without merge. Merged MRs may also populate closed_at; skip
+		// those so merge already handled above is not double-emitted
+		// as closed. Comments on already-closed MRs bump updated_at
+		// but not closed_at, so the watermark comparison avoids
+		// re-dispatching retro.
+		if mr.MergedAt.IsZero() && !mr.ClosedAt.IsZero() && mr.ClosedAt.After(since) {
+			closedBy := closedByUser(mr)
+			events = append(events, RoutableEvent{
+				Type:            "mr_event",
+				Action:          "closed",
+				IID:             mr.IID,
+				UpdatedAt:       mr.ClosedAt,
+				NoteAuthorID:    closedBy.ID,
+				NoteAuthorLogin: closedBy.Username,
+				IsBot:           closedBy.Bot,
+				MRSource:        mr.SourceProjectID,
+				MRTarget:        mr.TargetProjectID,
+				Labels:          mr.Labels,
+				SourceBranch:    mr.SourceBranch,
+				TargetBranch:    mr.TargetBranch,
+				MRAuthorID:      mr.Author.ID,
+				MRAuthorLogin:   mr.Author.Username,
 			})
 		}
 
@@ -255,6 +281,16 @@ func mergedByUser(mr MergeRequest) UserRef {
 	return mr.MergedBy
 }
 
+// closedByUser returns the user who closed the MR, falling back to
+// the MR author when closed_by is absent (some GitLab versions omit
+// it).
+func closedByUser(mr MergeRequest) UserRef {
+	if mr.ClosedBy.ID != 0 {
+		return mr.ClosedBy
+	}
+	return mr.Author
+}
+
 // isProjectAccessTokenBot detects GitLab project access token bot users
 // by username pattern.
 func isProjectAccessTokenBot(username string) bool {
@@ -291,8 +327,10 @@ func (p *Poller) filterBotEvents(events []RoutableEvent) []RoutableEvent {
 		}
 		// Bot-authored MR opens must dispatch review — the code agent
 		// opens MRs as the project access token bot, matching GitHub's
-		// [bot] exception on pull_request_target.opened.
-		if event.Type == "mr_event" && event.Action == "opened" {
+		// [bot] exception on pull_request_target.opened. Bot-closed
+		// unmerged MRs dispatch retro (read-only lifecycle accounting;
+		// any closer may trigger it).
+		if event.Type == "mr_event" && (event.Action == "opened" || event.Action == "closed") {
 			filtered = append(filtered, event)
 			continue
 		}
