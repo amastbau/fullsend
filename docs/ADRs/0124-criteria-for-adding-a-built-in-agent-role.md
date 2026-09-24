@@ -56,7 +56,14 @@ that the failing test names.
    project items. Agent roles get no write access on control-plane scopes:
    `actions`, `workflows`, `administration`, `secrets`, variables,
    environments and deployments. Read access, such as reading run logs, is
-   judged like any other scope.
+   judged like any other scope. This follows GitHub's own practice in GitHub
+   Agentic Workflows: agents run read-only and request actions through
+   structured output, which separate permission-controlled jobs execute
+   ([safe outputs](https://github.github.com/gh-aw/reference/safe-outputs/)).
+   Its draft design for approving workflow runs calls `actions: write` "a
+   broad GitHub permission scope" and grants it only where that output is
+   explicitly enabled
+   ([gh-aw ADR-52541](https://github.com/github/gh-aw/blob/38a5e1f56a1cdc7e606ce7bb48ed5b899375d212/docs/adr/52541-add-approve-workflow-run-safe-output.md)).
 3. **The App identity is visible where it acts.** A role is also a GitHub
    App, and its name is how people see which agent acted: on comments,
    reviews, labels, commits and pull requests. A new App is worth installing
