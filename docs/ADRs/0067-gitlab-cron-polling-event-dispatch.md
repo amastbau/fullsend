@@ -375,6 +375,11 @@ protected, masked CI/CD variable (`FULLSEND_FORGE_TOKEN`).
 > configuration must grant Developers merge (or push) access to the
 > default branch, or keep the bot PAT at Maintainer (40), for dispatch
 > to keep working.
+>
+> **Update (#7667):** a failed `CreatePipeline` (including that 403) now
+> fails the poll cycle after persisting retry state. The permission gap
+> is unchanged; the poll job no longer reports success when no agent
+> pipeline was created.
 
 Key properties:
 
