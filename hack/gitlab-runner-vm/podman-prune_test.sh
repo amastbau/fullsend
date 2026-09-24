@@ -139,6 +139,21 @@ else
   fail "prepare.sh/cleanup.sh/gateway.sh missing prune_unused_podman_storage"
 fi
 
+if grep -Fq 'acquire_podman_prune_lock' "${GATEWAY}" \
+  && grep -Fq 'release_podman_prune_lock' "${GATEWAY}" \
+  && grep -Fq 'acquire_podman_prune_lock' "${PREPARE}" \
+  && grep -Fq 'release_podman_prune_lock' "${PREPARE}"; then
+  pass "prepare.sh serializes prune+pull+create via gateway.sh's lock helpers"
+else
+  fail "prepare.sh/gateway.sh missing acquire_podman_prune_lock/release_podman_prune_lock"
+fi
+
+if grep -Fq 'TimeoutStartSec=infinity' "${SETUP}"; then
+  pass "fullsend-podman-prune.service does not inherit the systemd manager's default start timeout"
+else
+  fail "fullsend-podman-prune.service missing TimeoutStartSec=infinity"
+fi
+
 echo "== in-flight skip =="
 write_podman_stub
 reset_prune_fixtures
@@ -268,6 +283,59 @@ elif logged 'container prune -f --filter until=30m'; then
   pass "unrelated running container does not skip prune"
 else
   fail "unrelated container path did not prune: $(tr '\n' '|' < "${PODMAN_LOG}")"
+fi
+
+echo "== lock held by prepare.sh skips the timer's run =="
+reset_prune_fixtures
+: > "${PS_A_FILE}"
+LOCK_DIR="${FAKE_HOME}/.local/state/fullsend-gitlab-runner"
+mkdir -p "${LOCK_DIR}"
+LOCK_FILE="${LOCK_DIR}/podman-prune.lock"
+(
+  exec 9>"${LOCK_FILE}"
+  flock -x 9
+  sleep 2
+) &
+HOLDER_PID=$!
+sleep 0.3
+run_prune
+wait "${HOLDER_PID}"
+if [ "${RUN_PRUNE_RC}" -ne 0 ]; then
+  fail "run held by another lock holder should skip with rc=0 (rc=${RUN_PRUNE_RC}): ${RUN_PRUNE_OUT}"
+elif logged 'container prune' || logged 'image prune' || logged 'rmi'; then
+  fail "prune ran while another process held the lock: $(tr '\n' '|' < "${PODMAN_LOG}")"
+elif printf '%s' "${RUN_PRUNE_OUT}" | grep -Fq 'skipping prune: lock held'; then
+  pass "a lock held by another process (e.g. prepare.sh) skips the timer's run"
+else
+  fail "held-lock run did not report skip: ${RUN_PRUNE_OUT}"
+fi
+
+echo "== FULLSEND_PODMAN_PRUNE_LOCK_HELD trusts an already-serialized caller =="
+reset_prune_fixtures
+printf 'runner-9|exited\n' > "${PS_A_FILE}"
+cat > "${IMAGES_FILE}" <<'IMAGES'
+ghcr.io/fullsend-ai/fullsend-runner:old
+IMAGES
+(
+  exec 9>"${LOCK_FILE}"
+  flock -x 9
+  sleep 2
+) &
+HOLDER_PID=$!
+sleep 0.3
+RUN_PRUNE_RC=0
+RUN_PRUNE_OUT=$(
+  FULLSEND_PODMAN_KEEP_IMAGES="${KEEP_FILE}" \
+  FULLSEND_PODMAN_PRUNE_LOCK_HELD=1 \
+  bash "${PRUNE}"
+) && RUN_PRUNE_RC=0 || RUN_PRUNE_RC=$?
+wait "${HOLDER_PID}"
+if [ "${RUN_PRUNE_RC}" -ne 0 ]; then
+  fail "FULLSEND_PODMAN_PRUNE_LOCK_HELD run should succeed (rc=${RUN_PRUNE_RC}): ${RUN_PRUNE_OUT}"
+elif ! logged 'image prune -f'; then
+  fail "FULLSEND_PODMAN_PRUNE_LOCK_HELD still skipped instead of trusting the caller: ${RUN_PRUNE_OUT}"
+else
+  pass "FULLSEND_PODMAN_PRUNE_LOCK_HELD bypasses the self-lock for a caller that already holds it"
 fi
 
 echo "== install_podman_prune =="

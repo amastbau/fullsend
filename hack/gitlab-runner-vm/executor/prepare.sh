@@ -94,6 +94,18 @@ if podman container exists "${CONTAINER_NAME}" 2>/dev/null; then
   fi
 fi
 
+# Serialize against the hourly podman-prune.sh timer from here through the
+# container actually starting: job_in_flight() in podman-prune.sh has
+# nothing to match on during this window (the old leftovers were just
+# reaped above and runner-${JOB_ID} does not exist until podman create
+# below), so a concurrent timer tick could otherwise prune a layer this
+# pull is still writing or rmi the job's own image right after it lands
+# (review on #7669). acquire_podman_prune_lock's fd-backed lock is released
+# by the kernel even if this script dies mid-window, so no separate
+# cleanup.sh unlock is needed on failure paths.
+acquire_podman_prune_lock
+trap release_podman_prune_lock EXIT
+
 # Reclaim unused images so this pull has disk headroom (#7663). Protect this
 # job's own image: the keep-file only lists the provision-time warm cache,
 # and `podman images` lists newest-first, so a cached copy of ${IMAGE} could
@@ -153,6 +165,11 @@ podman create \
   sleep infinity
 
 podman start "${CONTAINER_NAME}"
+
+# The job container is up: release the prune lock so the hourly timer (or a
+# concurrent cleanup.sh) can run again. The EXIT trap makes this a no-op
+# safety net if anything above returned early instead.
+release_podman_prune_lock
 
 # Host CA trust is injected into all containers by the OCI createRuntime hook
 # installed by setup.sh (install_ca_hook). No per-container CA injection needed.

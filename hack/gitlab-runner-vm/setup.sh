@@ -848,6 +848,11 @@ After=podman.socket
 [Service]
 Type=oneshot
 Nice=19
+# The observed failure mode was ~45 GiB of unused images; without this,
+# the systemd manager's DefaultTimeoutStartSec (typically 90s) SIGTERMs a
+# still-running reclaim before it frees enough space, so the very next
+# pull can still hit ENOSPC (review on #7663/#7669).
+TimeoutStartSec=infinity
 ExecStart=%h/.local/lib/fullsend/podman-prune.sh
 EOF
 

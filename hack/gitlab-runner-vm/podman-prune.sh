@@ -17,11 +17,17 @@
 #   set, protects one additional ref for that invocation only (gateway.sh's
 #   prune_unused_podman_storage uses this to protect the job's own image
 #   during prepare.sh's pre-pull prune).
+# - Serializes against prepare.sh's own reclaim-then-pull-then-create window
+#   via a well-known flock (see acquire_podman_prune_lock in gateway.sh):
+#   this timer-driven run skips entirely, the same as the in-flight skip
+#   below, when prepare.sh already holds the lock (review on #7669).
 #
 # Idempotent: safe to re-run; a clean host is a no-op.
 set -euo pipefail
 
 KEEP_FILE="${FULLSEND_PODMAN_KEEP_IMAGES:-${HOME}/.config/fullsend-gitlab-runner/keep-images}"
+# Must match gateway.sh's PODMAN_PRUNE_LOCK_FILE default.
+LOCK_FILE="${FULLSEND_PODMAN_PRUNE_LOCK_FILE:-${HOME}/.local/state/fullsend-gitlab-runner/podman-prune.lock}"
 # Stopped leftovers older than this may be reaped. prepare.sh's create→start
 # window is milliseconds; 30m is well above that and still reclaims images
 # held by killed-job containers that cleanup.sh never saw.
@@ -98,6 +104,23 @@ prune_unused_tagged_images() {
 if ! command -v podman >/dev/null 2>&1; then
   echo "ERROR: podman not found in PATH" >&2
   exit 1
+fi
+
+# FULLSEND_PODMAN_PRUNE_LOCK_HELD means a caller (prepare.sh, via
+# gateway.sh's acquire_podman_prune_lock) already serialized this
+# invocation as part of its own critical section — trust it rather than
+# also flocking here, which a child process doing independently would see
+# as unavailable (the caller holds it) and skip a prune the caller wants to
+# run. Anyone else (in practice, only the hourly timer's direct ExecStart)
+# takes the lock itself, non-blocking, and skips the whole run if another
+# holder (prepare.sh or cleanup.sh's own prune) already has it.
+if [ -z "${FULLSEND_PODMAN_PRUNE_LOCK_HELD:-}" ]; then
+  mkdir -p "$(dirname "${LOCK_FILE}")"
+  exec {PODMAN_PRUNE_OWN_LOCK_FD}>"${LOCK_FILE}"
+  if ! flock -n "${PODMAN_PRUNE_OWN_LOCK_FD}"; then
+    log "skipping prune: lock held by another prune/prepare run"
+    exit 0
+  fi
 fi
 
 if job_in_flight; then

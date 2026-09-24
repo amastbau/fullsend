@@ -82,6 +82,11 @@ user_systemctl() {
 # `podman images` lists newest-first — a cached copy of the image about to
 # be pulled is a plausible rmi target otherwise, forcing a re-pull right
 # after the prune that was supposed to make room for it (#7663).
+#
+# When FULLSEND_PODMAN_PRUNE_LOCK_HELD is already exported (prepare.sh's
+# caller holds the serialization lock via acquire_podman_prune_lock below),
+# that flag propagates to the podman-prune.sh child process and tells it not
+# to also try to flock the file — see acquire_podman_prune_lock for why.
 prune_unused_podman_storage() {
   local prune="${HOME}/.local/lib/fullsend/podman-prune.sh"
   local extra_keep="${1:-}"
@@ -89,6 +94,50 @@ prune_unused_podman_storage() {
     echo "Pruning unused Podman storage"
     FULLSEND_PODMAN_PRUNE_EXTRA_KEEP="${extra_keep}" timeout --kill-after=5 30 "${prune}" || true
   fi
+}
+
+# Well-known lock serializing the hourly podman-prune.sh timer against
+# prepare.sh's own reclaim-then-pull-then-create window. job_in_flight() in
+# podman-prune.sh only treats a non-exited runner-*/openshell-* container as
+# in-flight, but prepare.sh reaps those leftovers and does not create
+# runner-${JOB_ID} until after the image pull and
+# ensure_job_openshell_gateway — so during that window no such container
+# exists yet and a concurrent timer tick sees nothing in-flight. It can then
+# run `podman image prune -f` / `podman rmi` while prepare.sh's own pull is
+# still writing layers, deleting a dangling layer mid-write or (once the
+# per-invocation extra-keep protection from prune_unused_podman_storage's
+# own call has ended) the job's freshly cached image (review on #7669).
+PODMAN_PRUNE_LOCK_FILE="${FULLSEND_PODMAN_PRUNE_LOCK_FILE:-${HOME}/.local/state/fullsend-gitlab-runner/podman-prune.lock}"
+
+# Acquire the lock for the rest of the caller's critical section (prepare.sh
+# holds it from just before prune_unused_podman_storage until after `podman
+# start`). Exports FULLSEND_PODMAN_PRUNE_LOCK_HELD so a podman-prune.sh
+# invocation made from inside that section trusts the caller instead of
+# trying to flock the same path itself — a child process locking it
+# independently would see the parent's lock as unavailable and skip a prune
+# the caller actually wants to run.
+#
+# The lock lives on this shell's open file descriptor, so it is released by
+# the kernel when this process exits for any reason — normal completion,
+# `set -e`, or a signal — even if release_podman_prune_lock below is never
+# reached. That is why cleanup.sh needs no matching unlock call for
+# prepare.sh's failure paths.
+acquire_podman_prune_lock() {
+  mkdir -p "$(dirname "${PODMAN_PRUNE_LOCK_FILE}")"
+  exec {PODMAN_PRUNE_LOCK_FD}>"${PODMAN_PRUNE_LOCK_FILE}"
+  flock -x "${PODMAN_PRUNE_LOCK_FD}"
+  export FULLSEND_PODMAN_PRUNE_LOCK_HELD=1
+}
+
+# Release a lock taken by acquire_podman_prune_lock. Safe to call even when
+# no lock was acquired (e.g. a second, defensive call).
+release_podman_prune_lock() {
+  if [ -n "${PODMAN_PRUNE_LOCK_FD:-}" ]; then
+    flock -u "${PODMAN_PRUNE_LOCK_FD}" 2>/dev/null || true
+    exec {PODMAN_PRUNE_LOCK_FD}>&- 2>/dev/null || true
+    unset PODMAN_PRUNE_LOCK_FD
+  fi
+  unset FULLSEND_PODMAN_PRUNE_LOCK_HELD
 }
 
 # OpenShell's systemd user unit sets StateDirectory=openshell/gateway, which
