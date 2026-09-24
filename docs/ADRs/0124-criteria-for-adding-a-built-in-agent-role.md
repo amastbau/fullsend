@@ -60,9 +60,9 @@ that the failing test names.
    Agentic Workflows: agents run read-only and request actions through
    structured output, which separate permission-controlled jobs execute
    ([safe outputs](https://github.github.com/gh-aw/reference/safe-outputs/)).
-   Its draft design for approving workflow runs calls `actions: write` "a
-   broad GitHub permission scope" and grants it only where that output is
-   explicitly enabled
+   Its experimental `approve-workflow-run` safe output (merged in
+   github/gh-aw#52541) calls `actions: write` "a broad GitHub permission
+   scope" and grants it only where that output is explicitly enabled
    ([gh-aw ADR-52541](https://github.com/github/gh-aw/blob/38a5e1f56a1cdc7e606ce7bb48ed5b899375d212/docs/adr/52541-add-approve-workflow-run-safe-output.md)).
 3. **The App identity is visible where it acts.** A role is also a GitHub
    App, and its name is how people see which agent acted: on comments,
