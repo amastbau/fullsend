@@ -141,6 +141,8 @@ jobs:
         if: steps.find.outputs.artifacts != ''
         run: |
           set -euo pipefail
+          {
+          echo '```text'
           for art in result/fullsend-*; do
             echo "### agent: ${art#result/fullsend-}"
             for m in "$art"/*/metrics.json; do
@@ -151,14 +153,19 @@ jobs:
             last=$(printf '%s\n' "$art"/*/iteration-*/output | sort -V | tail -1)
             for r in "$last"/*.json; do
               if [ -f "$r" ]; then
-                jq '{action, pr_number, head_sha, findings: (.findings|length?)}' "$r"
+                # one JSON line: newlines and control characters stay escaped
+                jq -c '{action, pr_number, head_sha, findings: (.findings|length?)}' "$r"
               fi
             done
-          done | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+          echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 ```
 
-The summary prints the newest iteration's output as-is. It is for reading,
-not for acting on; Step 3 shows how to select a validated result. A run
+The summary prints the newest iteration's output for reading, not for acting
+on. `jq -c` keeps each result on one line with newlines and control characters
+escaped, so agent text cannot start a workflow command or break out of the
+code fence in the job summary; Step 3 shows how to select a validated result. A run
 without `metrics.json` or without a result file prints only the agent line.
 
 Output from a run of the default review agent:
@@ -167,12 +174,7 @@ Output from a run of the default review agent:
 fullsend-review
 ### agent: review
 model=claude-opus-4-6 runtime=claude iterations=1 turns=33 cost_usd=2.16544465
-{
-  "action": "approve",
-  "pr_number": 76,
-  "head_sha": "f86f6fccf3cda777e85131ce46f6736ee8f585bf",
-  "findings": 0
-}
+{"action":"approve","pr_number":76,"head_sha":"f86f6fccf3cda777e85131ce46f6736ee8f585bf","findings":0}
 ```
 
 The same pull request produced three more shim completions (a review-submitted
@@ -216,6 +218,7 @@ jobs:
     env:
       AGENT: ci-retry                # only this agent's runs matter here
       CI_WORKFLOW: ci                # only this workflow's jobs may be re-run
+      CI_JOBS: "flaky-unit"          # only these job names (space-separated)
     steps:
       - name: Check this run is a ${{ env.AGENT }} run
         id: find
@@ -240,10 +243,12 @@ jobs:
         if: steps.find.outputs.artifact != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}   # the commit the agent ran on
         run: |
           f=""
           for d in $(printf '%s\n' result/*/iteration-*/output | sort -Vr); do   # newest first
-            if jq -e '(.recommended_action | type == "string") and (.retry_targets | type == "array")' \
+            if jq -e '(.recommended_action | IN("retry", "none"))
+                      and (.retry_targets | type == "array" and all(.[]; (.job_id | type == "number") and (.job_name | type == "string")))' \
                  "$d/ci-retry-result.json" >/dev/null 2>&1; then
               f="$d/ci-retry-result.json"; break
             fi
@@ -255,6 +260,8 @@ jobs:
             job=$(gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id") || continue        # confirm against the API
             [ "$(jq -r .conclusion <<<"$job")" = failure ] || continue
             [ "$(jq -r .workflow_name <<<"$job")" = "$CI_WORKFLOW" ] || continue
+            [ "$(jq -r .head_sha <<<"$job")" = "$HEAD_SHA" ] || continue
+            case " $CI_JOBS " in *" $(jq -r .name <<<"$job") "*) ;; *) continue ;; esac
             run=$(jq -r .run_id <<<"$job")
             attempt=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .run_attempt) || continue
             [ "$attempt" -le 2 ] || continue                                             # budget
@@ -270,11 +277,17 @@ What each guard does:
   before anything is downloaded; other agents' runs and routing-only runs stop
   there. An API error fails the step instead of reading as "nothing to do".
 - **The iteration walk** uses the newest result that matches the schema, so
-  an invalid later iteration is skipped.
+  an invalid later iteration is skipped. Mirror your harness schema in the
+  `jq -e` check. The schema is a filter, not a trust boundary: every guard
+  below still applies to a result that passes it.
 - **`numbers`** drops any id that is not a number before it reaches a URL.
 - **The API lookup** confirms each id is a failed job in this repository, in
-  the workflow named by `CI_WORKFLOW`. The agent can only choose among failed
-  jobs of that one workflow, never another workflow's runs.
+  the workflow named by `CI_WORKFLOW`, with a name listed in `CI_JOBS`.
+- **`HEAD_SHA`** comes from the event, not the agent. A job on any other
+  commit is skipped. For pull request events the shim's head SHA is the pull
+  request head. For comment and issue events it is the default branch, so the
+  follow-up skips those runs rather than guessing. The agent can only choose
+  among failed, allowlisted jobs on the commit it ran on.
 - **`run_attempt`** bounds repeats without any bookkeeping of your own.
 - **`--repo`** is required: the job has no checkout, so `gh` cannot infer the
   repository.
@@ -296,17 +309,17 @@ gh run list --limit 12 --json name,event,conclusion,databaseId \
 ```
 
 ```text
-fullsend-run-info [workflow_run] success id=36049484065
-ci-rerun [workflow_run] success id=36049483995
-fullsend [workflow_run] success id=36049466518
-ci [push] success id=36049447970
+fullsend-run-info [workflow_run] success id=36060241831
+ci-rerun [workflow_run] success id=36060241805
+fullsend [workflow_run] success id=36060218326
+ci [push] success id=36060203210
 ```
 
 Then confirm the re-run happened and who triggered it:
 
 ```bash
-gh api repos/OWNER/REPO/actions/runs/36049447970 --jq '"attempt=\(.run_attempt) conclusion=\(.conclusion)"'
-gh api repos/OWNER/REPO/actions/runs/36049447970/attempts/2 --jq .triggering_actor.login
+gh api repos/OWNER/REPO/actions/runs/36060203210 --jq '"attempt=\(.run_attempt) conclusion=\(.conclusion)"'
+gh api repos/OWNER/REPO/actions/runs/36060203210/attempts/2 --jq .triggering_actor.login
 ```
 
 ```text
@@ -316,7 +329,8 @@ github-actions[bot]
 
 `ci` shows `success` because the list reports the latest attempt. The
 follow-up log shows `using result/fs-cir-probe/iteration-1/output/ci-retry-result.json`:
-the probe's iteration-2 held an invalid result and was skipped.
+the probe's iteration-2 held an invalid result and was skipped. A second
+target with a job id that does not exist returned 404 and was skipped too.
 
 The re-run attempt is attributed to `github-actions[bot]` and to the follow-up
 run, not to the agent's App. On a pull request, the re-run shows only as the
@@ -389,6 +403,7 @@ restricts which actions may run, the agent repository must be on the allowlist.
 | `Resource not accessible by integration` on re-run | Job lacks `actions: write` | Add it to the job's `permissions` |
 | `failed to determine base repo` | `gh` run without a checkout | Pass `--repo "$GITHUB_REPOSITORY"` |
 | Re-run refused | The target run is still in progress | Only completed runs can be re-run; wait or skip |
+| Re-run step runs but re-runs nothing | The agent run was triggered by a comment or issue event, so its head SHA is the default branch; or the job name is not in `CI_JOBS` | Expected for those runs; add the job name to `CI_JOBS` if it should be re-run |
 
 ## See also
 
