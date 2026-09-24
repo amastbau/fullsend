@@ -17,8 +17,9 @@ grants, because fullsend keeps control-plane write access out of agent roles
 
 - A repository with fullsend installed in per-repo mode (the `fullsend`
   shim workflow lives in your `.github/workflows/`).
-- An agent whose harness declares a `validation_loop` with a `schema`, so the
-  run ends with a validated result file. See
+- An agent whose [harness](../../glossary.md#harness) declares a
+  `validation_loop` with a `schema`, so the run ends with a validated result
+  file ([harness reference](../../reference/harness-reference.md)). See
   [Bring Your Own Agent](bring-your-own-agent.md#minimum-viable-agent).
 - Write access to the repository, to add a workflow on the default branch.
 
