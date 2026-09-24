@@ -42,7 +42,7 @@ privilege and separation of duties
 ## Decision
 
 Maintainers add or widen a built-in agent role only when the request passes
-all five tests below. A request that fails is answered with the alternative
+all six tests below. A request that fails is answered with the alternative
 that the failing test names.
 
 1. **No path without a role.** Can the action run from a workflow in the
@@ -57,9 +57,15 @@ that the failing test names.
    `actions`, `workflows`, `administration`, `secrets`, variables,
    environments and deployments. Read access, such as reading run logs, is
    judged like any other scope.
-3. **One purpose.** The role serves one purpose. The request names the
+3. **The App identity is visible where it acts.** A role is also a GitHub
+   App, and its name is how people see which agent acted: on comments,
+   reviews, labels, commits and pull requests. A new App is worth installing
+   only when its actions show up under that name on the issue or pull
+   request, separate from the default `github-actions[bot]`. An action whose
+   actor never surfaces there gains no visibility from its own App.
+4. **One purpose.** The role serves one purpose. The request names the
    endpoints its agents call. The `read` level is a strict subset of `write`.
-4. **Every write group earns its place next to the others.** This is where
+5. **Every write group earns its place next to the others.** This is where
    caution concentrates. A role that holds two or more write permission groups
    is judged by what the groups enable together, not one scope at a time. The
    request lists what each new scope unlocks across all of its endpoints, not
@@ -68,7 +74,7 @@ that the failing test names.
    both produce content and control how automation runs fails.
    `coder` passes: contents, pull requests and issues together are its one
    purpose, writing a change and proposing it.
-5. **General need.** More than one agent or adopter needs it, and it is safe
+6. **General need.** More than one agent or adopter needs it, and it is safe
    for any harness that names it. A need specific to one agent is served by a
    custom role on its author's standalone mint
    ([Custom Agent Identity](../guides/user/custom-agent-identity.md)). What an
@@ -79,12 +85,17 @@ test infrastructure are outside this decision.
 
 ## Applying the criteria: `actions: write` to re-run CI
 
-The `ci-watch` request fails tests 1, 2 and 4.
+The `ci-watch` request fails tests 1, 2, 3 and 5.
 
 - **Test 1.** A workflow the user owns, with `permissions: actions: write`,
   re-runs the job with the job token. The guide runs this end to end.
 - **Test 2.** Re-running a job is a control-plane operation, not agent output.
-- **Test 4.** `actions: write` also approves fork pull request runs,
+- **Test 3.** A re-run shows on the pull request only as a new check result.
+  That check run belongs to the `github-actions` app, whoever triggered the
+  re-run, and the pull request timeline records no event. The actor appears
+  only as `triggering_actor` on the run's attempt. A dedicated App would add
+  an installation for every adopter and nothing a reviewer sees.
+- **Test 5.** `actions: write` also approves fork pull request runs,
   dispatches any workflow on any ref, and cancels or deletes runs, logs and
   artifacts. With `pull_requests: write` in the same token, one agent could
   shape a pull request and control the runs it triggers.

@@ -319,7 +319,8 @@ follow-up log shows `using result/fs-cir-probe/iteration-1/output/ci-retry-resul
 the probe's iteration-2 held an invalid result and was skipped.
 
 The re-run attempt is attributed to `github-actions[bot]` and to the follow-up
-run, not to the agent's App. Comments the agent posted still carry the App
+run, not to the agent's App. On a pull request, the re-run shows only as the
+new check result; the actor is on the run's attempt page. Comments the agent posted still carry the App
 identity.
 
 ## Rules of the road
