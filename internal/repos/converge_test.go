@@ -1994,6 +1994,310 @@ func TestConverge_GitLab_RefUpgradeAndMissingHelperDedupes(t *testing.T) {
 	}
 }
 
+func TestUniqueScaffoldFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []forge.TreeFile
+		want []forge.TreeFile
+	}{
+		{name: "nil", in: nil, want: nil},
+		{name: "empty", in: []forge.TreeFile{}, want: []forge.TreeFile{}},
+		{
+			name: "single",
+			in:   []forge.TreeFile{{Path: "a", Content: []byte("1")}},
+			want: []forge.TreeFile{{Path: "a", Content: []byte("1")}},
+		},
+		{
+			name: "already unique",
+			in: []forge.TreeFile{
+				{Path: "a", Content: []byte("1")},
+				{Path: "b", Content: []byte("2")},
+			},
+			want: []forge.TreeFile{
+				{Path: "a", Content: []byte("1")},
+				{Path: "b", Content: []byte("2")},
+			},
+		},
+		{
+			name: "two-way duplicate first wins",
+			in: []forge.TreeFile{
+				{Path: "a", Content: []byte("first")},
+				{Path: "a", Content: []byte("second")},
+			},
+			want: []forge.TreeFile{{Path: "a", Content: []byte("first")}},
+		},
+		{
+			name: "three-way duplicate ref then root-ci then repair",
+			in: []forge.TreeFile{
+				{Path: ".gitlab-ci.yml", Content: []byte("ref")},
+				{Path: ".gitlab-ci.yml", Content: []byte("root-ci")},
+				{Path: ".gitlab-ci.yml", Content: []byte("repair")},
+			},
+			want: []forge.TreeFile{{Path: ".gitlab-ci.yml", Content: []byte("ref")}},
+		},
+		{
+			name: "three-way duplicate repair then ref then root-ci",
+			in: []forge.TreeFile{
+				{Path: ".gitlab-ci.yml", Content: []byte("repair")},
+				{Path: ".gitlab-ci.yml", Content: []byte("ref")},
+				{Path: ".gitlab-ci.yml", Content: []byte("root-ci")},
+			},
+			want: []forge.TreeFile{{Path: ".gitlab-ci.yml", Content: []byte("repair")}},
+		},
+		{
+			name: "three-way duplicate root-ci then repair then ref",
+			in: []forge.TreeFile{
+				{Path: ".gitlab-ci.yml", Content: []byte("root-ci")},
+				{Path: ".gitlab-ci.yml", Content: []byte("repair")},
+				{Path: ".gitlab-ci.yml", Content: []byte("ref")},
+			},
+			want: []forge.TreeFile{{Path: ".gitlab-ci.yml", Content: []byte("root-ci")}},
+		},
+		{
+			name: "delete then create first wins",
+			in: []forge.TreeFile{
+				{Path: "x", Delete: true},
+				{Path: "x", Content: []byte("new")},
+			},
+			want: []forge.TreeFile{{Path: "x", Delete: true}},
+		},
+		{
+			name: "create then delete first wins",
+			in: []forge.TreeFile{
+				{Path: "x", Content: []byte("new")},
+				{Path: "x", Delete: true},
+			},
+			want: []forge.TreeFile{{Path: "x", Content: []byte("new")}},
+		},
+		{
+			name: "preserves first-seen order among unique paths",
+			in: []forge.TreeFile{
+				{Path: "a", Content: []byte("1")},
+				{Path: "b", Content: []byte("2")},
+				{Path: "a", Content: []byte("dup")},
+				{Path: "c", Content: []byte("3")},
+			},
+			want: []forge.TreeFile{
+				{Path: "a", Content: []byte("1")},
+				{Path: "b", Content: []byte("2")},
+				{Path: "c", Content: []byte("3")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := uniqueScaffoldFiles(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d (%+v)", len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i].Path != tt.want[i].Path {
+					t.Errorf("files[%d].Path = %q, want %q", i, got[i].Path, tt.want[i].Path)
+				}
+				if string(got[i].Content) != string(tt.want[i].Content) {
+					t.Errorf("files[%d].Content = %q, want %q", i, got[i].Content, tt.want[i].Content)
+				}
+				if got[i].Delete != tt.want[i].Delete {
+					t.Errorf("files[%d].Delete = %v, want %v", i, got[i].Delete, tt.want[i].Delete)
+				}
+			}
+		})
+	}
+}
+
+func TestConverge_ScaffoldBatchHasUniquePaths(t *testing.T) {
+	presetPath := writePresetFile(t, testPresetYAML)
+	thinCaller := scaffold.PerRepoThinCallerPaths()[0]
+	obsoleteRootCI := []byte(`---
+include:
+  - local: '.gitlab/ci/fullsend-pipeline.yml'
+
+workflow:
+  name: 'fullsend $CI_PIPELINE_SOURCE $STAGE $RESOURCE_KEY'
+  auto_cancel:
+    on_new_commit: none
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_REF_PROTECTED == "true"
+    - if: $CI_PIPELINE_SOURCE == "api" && $CI_COMMIT_REF_PROTECTED == "true" && $STAGE
+`)
+
+	tests := []struct {
+		name        string
+		gitlab      bool
+		refUpgrade  bool
+		rootCI      bool
+		repair      bool
+		drift       bool
+		preset      bool
+		wantPath    string
+		wantPathAlt string
+	}{
+		{
+			name:       "gitlab ref+repair",
+			gitlab:     true,
+			refUpgrade: true,
+			repair:     true,
+			wantPath:   gitlabTrustScriptPath,
+		},
+		{
+			name:        "gitlab ref+root-ci+repair",
+			gitlab:      true,
+			refUpgrade:  true,
+			rootCI:      true,
+			repair:      true,
+			wantPath:    gitlabTrustScriptPath,
+			wantPathAlt: ".gitlab-ci.yml",
+		},
+		{
+			name:     "gitlab repair+drift+preset",
+			gitlab:   true,
+			repair:   true,
+			drift:    true,
+			preset:   true,
+			wantPath: gitlabTrustScriptPath,
+		},
+		{
+			name:        "gitlab ref+root-ci+repair+drift+preset",
+			gitlab:      true,
+			refUpgrade:  true,
+			rootCI:      true,
+			repair:      true,
+			drift:       true,
+			preset:      true,
+			wantPath:    gitlabTrustScriptPath,
+			wantPathAlt: ".gitlab-ci.yml",
+		},
+		{
+			name:       "github ref+repair",
+			refUpgrade: true,
+			repair:     true,
+			wantPath:   thinCaller,
+		},
+		{
+			name:     "github repair+drift+preset",
+			repair:   true,
+			drift:    true,
+			preset:   true,
+			wantPath: thinCaller,
+		},
+		{
+			name:       "github ref+repair+drift+preset",
+			refUpgrade: true,
+			repair:     true,
+			drift:      true,
+			preset:     true,
+			wantPath:   thinCaller,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fc := newFakeClientForBatch("acme/api")
+			var cfg ConvergeConfig
+			if tt.gitlab {
+				populateGitLabInstalled(fc, "acme", "api")
+				populateGitLabScaffoldContent(t, fc, "acme", "api", "v2.5.0")
+				if tt.refUpgrade {
+					fc.FileContents["acme/api/.gitlab/ci/fullsend-dispatch.yml"] = []byte("  ref: v1.0.0\n")
+				}
+				if tt.rootCI {
+					fc.FileContents["acme/api/.gitlab-ci.yml"] = obsoleteRootCI
+				}
+				if tt.repair {
+					delete(fc.FileContents, "acme/api/"+gitlabTrustScriptPath)
+				}
+				if tt.drift {
+					fc.FileContents["acme/api/.gitlab/ci/fullsend-poll.yml"] = []byte("---\n# stale poll template\n")
+				}
+				if tt.preset {
+					fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
+				}
+				cfg = gitlabConvergeCfg("acme/api")
+				if tt.preset {
+					cfg.Manifest.Defaults.ConfigBase.Source = presetPath
+				}
+			} else {
+				markFullyInstalled(fc, "acme", "api")
+				populateScaffoldContent(t, fc, "acme", "api", "v1.0.0", "https://mint.example.com")
+				if tt.drift {
+					fc.FileContents["acme/api/.github/workflows/fullsend.yaml"] = makeWorkflow("v1.0.0")
+				}
+				if tt.refUpgrade {
+					fc.FileContents["acme/api/.github/workflows/fullsend.yaml"] = makeWorkflow("v0.9.0")
+				}
+				if tt.repair {
+					delete(fc.FileContents, "acme/api/"+thinCaller)
+				}
+				if tt.preset {
+					fc.FileContents["acme/api/.fullsend/config.base.yaml"] = []byte("version: \"1\"\nruntime: pi\n")
+				}
+				m := newConvergeManifest("acme/api")
+				if tt.preset {
+					m.Defaults.ConfigBase.Source = presetPath
+				}
+				cfg = convergeCfgWithDefaults(m)
+			}
+
+			sc := &spyScaffoldCommit{}
+			result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
+			if err != nil {
+				t.Fatalf("Converge() error: %v", err)
+			}
+			if len(result.Failed()) != 0 {
+				t.Fatalf("unexpected failure: %v", result.Failed()[0].Error)
+			}
+
+			if tt.refUpgrade {
+				hasRefUpgrade := false
+				for _, a := range result.Results[0].Actions {
+					if a.Component == "ref" && a.Action == "upgrade" {
+						hasRefUpgrade = true
+					}
+				}
+				if !hasRefUpgrade {
+					t.Fatalf("expected ref upgrade action, got %+v", result.Results[0].Actions)
+				}
+			}
+			if tt.rootCI {
+				hasRootCI := false
+				for _, a := range result.Results[0].Actions {
+					if a.Component == "gitlab-ci-rules" && a.Action == "update" {
+						hasRootCI = true
+					}
+				}
+				if !hasRootCI {
+					t.Fatalf("expected gitlab-ci-rules update, got %+v", result.Results[0].Actions)
+				}
+			}
+
+			sc.mu.Lock()
+			defer sc.mu.Unlock()
+			if len(sc.files) == 0 {
+				t.Fatal("expected scaffold commit with files")
+			}
+			counts := make(map[string]int, len(sc.files))
+			for _, f := range sc.files {
+				counts[f.Path]++
+			}
+			for path, n := range counts {
+				if n > 1 {
+					t.Errorf("path %s submitted %d times; want at most once", path, n)
+				}
+			}
+			if tt.wantPath != "" && counts[tt.wantPath] == 0 {
+				t.Errorf("expected %s in commit; files: %+v", tt.wantPath, sc.files)
+			}
+			if tt.wantPathAlt != "" && counts[tt.wantPathAlt] == 0 {
+				t.Errorf("expected %s in commit; files: %+v", tt.wantPathAlt, sc.files)
+			}
+			if tt.preset && counts[".fullsend/config.base.yaml"] == 0 {
+				t.Errorf("expected config.base.yaml in commit; files: %+v", sc.files)
+			}
+		})
+	}
+}
+
 func TestConverge_GitLab_RepairsMissingRoleTokenScript(t *testing.T) {
 	fc := newFakeClientForBatch("acme/api")
 	populateGitLabInstalled(fc, "acme", "api")
