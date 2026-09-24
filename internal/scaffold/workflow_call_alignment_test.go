@@ -454,6 +454,22 @@ func TestSetupGCPAllowsOpenAIOnlyRuns(t *testing.T) {
 	}
 }
 
+// TestReusableDispatchAllowsOpenAIOnlyRuns ensures the dispatcher accepts a
+// caller with an OpenAI credential route and no GCP secrets.
+func TestReusableDispatchAllowsOpenAIOnlyRuns(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "reusable-dispatch.yml"))
+	require.NoError(t, err)
+
+	var workflow reusableWorkflow
+	require.NoError(t, yaml.Unmarshal(content, &workflow))
+
+	for _, name := range []string{"FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_PROJECT_ID"} {
+		secret, ok := workflow.On.WorkflowCall.Secrets[name]
+		require.True(t, ok, "reusable dispatch must declare %s", name)
+		assert.False(t, secret.Required, "%s must be optional for OpenAI-only runs", name)
+	}
+}
+
 // TestReusableDispatchFixInstructionNormalizesCRLF validates that CRLF line endings
 // in a comment body are stripped before the fix instruction is written to GITHUB_OUTPUT.
 func TestReusableDispatchFixInstructionNormalizesCRLF(t *testing.T) {
