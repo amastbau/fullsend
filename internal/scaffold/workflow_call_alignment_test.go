@@ -439,10 +439,10 @@ func TestSetupGCPAllowsOpenAIOnlyRuns(t *testing.T) {
 	assert.False(t, provider.Required, "OpenAI-only repositories must be able to omit a GCP WIF provider")
 
 	guarded := map[string]bool{
-		"Pre-mask GCP credential file path": false,
-		"Authenticate to Google Cloud (WIF)":  false,
+		"Pre-mask GCP credential file path":  false,
+		"Authenticate to Google Cloud (WIF)": false,
 		"Mask GCP credential file paths":     false,
-		"Prepare sandbox credentials":         false,
+		"Prepare sandbox credentials":        false,
 	}
 	for _, step := range action.Runs.Steps {
 		if _, ok := guarded[step.Name]; ok {
@@ -452,6 +452,40 @@ func TestSetupGCPAllowsOpenAIOnlyRuns(t *testing.T) {
 	for name, hasGuard := range guarded {
 		assert.True(t, hasGuard, "%s must skip when no GCP WIF provider is configured", name)
 	}
+}
+
+func TestReusableDispatchAcceptsAndForwardsOpenAISecretForTriage(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "reusable-dispatch.yml"))
+	require.NoError(t, err)
+
+	var workflow struct {
+		On struct {
+			WorkflowCall struct {
+				Secrets map[string]workflowSecret `yaml:"secrets"`
+			} `yaml:"workflow_call"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &workflow))
+
+	for _, name := range []string{"FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_PROJECT_ID", "FULLSEND_OPENAI_API_KEY"} {
+		secret, ok := workflow.On.WorkflowCall.Secrets[name]
+		require.True(t, ok, "reusable dispatch must declare %s", name)
+		assert.False(t, secret.Required, "%s must be optional for an OpenAI-only repository", name)
+	}
+
+	for _, step := range workflow.Jobs["triage"].Steps {
+		if step.Name == "Run triage agent" {
+			assert.Equal(t, "${{ secrets.FULLSEND_OPENAI_API_KEY }}", step.Env["OPENAI_API_KEY"])
+			return
+		}
+	}
+	t.Fatal("triage agent step not found")
 }
 
 // TestReusableDispatchFixInstructionNormalizesCRLF validates that CRLF line endings
