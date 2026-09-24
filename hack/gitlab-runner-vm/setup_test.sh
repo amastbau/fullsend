@@ -221,7 +221,7 @@ else
   fail "configure_per_job_gateway missing seed-start skip"
 fi
 
-if grep -E '^[[:space:]]*(Environment=)?(XDG_RUNTIME_DIR=/run/user/%U|DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus)' "${SETUP}"; then
+if grep -Eq '^[[:space:]]*(Environment=)?(XDG_RUNTIME_DIR=/run/user/%U|DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus)' "${SETUP}"; then
   fail "setup_runner_user still interpolates systemd %U (expands to UID 0 on system units)"
 else
   pass "setup_runner_user does not interpolate systemd %U for the user-session env"
@@ -423,7 +423,7 @@ write_dropin '/run/user/0'
 run_setup setup_runner_user
 if [ "${RUN_SETUP_RC}" -ne 0 ]; then
   fail "setup_runner_user UID-0 convergence should succeed (rc=${RUN_SETUP_RC}): ${RUN_SETUP_OUT}"
-elif grep -Fx 'Environment=XDG_RUNTIME_DIR=/run/user/0' "${override_file}"; then
+elif grep -Fxq 'Environment=XDG_RUNTIME_DIR=/run/user/0' "${override_file}"; then
   fail "setup_runner_user left a /run/user/0 drop-in in place"
 elif grep -Fq "Environment=XDG_RUNTIME_DIR=/run/user/${FAKE_UID}" "${override_file}" \
   && grep -Fq "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${FAKE_UID}/bus" "${override_file}"; then
