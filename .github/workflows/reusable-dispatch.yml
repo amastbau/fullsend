@@ -680,7 +680,7 @@ jobs:
           export MINT_LISTEN_ADDR=127.0.0.1:8080
           "$RUNNER_TEMP/fullsend-local-mint" > "$RUNNER_TEMP/fullsend-local-mint.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/fullsend-local-mint.pid"
-          for attempt in {1..30}; do
+          for ((attempt=0; attempt<30; attempt++)); do
             if curl --silent --fail http://127.0.0.1:8080/health > /dev/null; then
               exit 0
             fi
