@@ -284,8 +284,10 @@ What each guard does:
 - **The API lookup** confirms each id is a failed job in this repository, in
   the workflow named by `CI_WORKFLOW`, with a name listed in `CI_JOBS`.
 - **`HEAD_SHA`** comes from the event, not the agent. A job on any other
-  commit is skipped. For pull request events the shim's head SHA is the pull
-  request head. For comment and issue events it is the default branch, so the
+  commit is skipped. For pull request events (`pull_request_target`) the shim
+  run's `head_sha` is the pull request head, the same SHA a `pull_request` CI
+  job reports; the job's own `GITHUB_SHA` (the base branch) is a different
+  value. For comment and issue events it is the default branch, so the
   follow-up skips those runs rather than guessing. The agent can only choose
   among failed, allowlisted jobs on the commit it ran on.
 - **`run_attempt`** bounds repeats without any bookkeeping of your own.
@@ -363,6 +365,9 @@ on:
       run-id:
         required: true
         type: string
+      head-sha:
+        required: true
+        type: string
 permissions: {}
 jobs:
   rerun:
@@ -370,7 +375,8 @@ jobs:
     permissions:
       actions: write
     steps:
-      # the gate, download and re-run steps from Step 3, using inputs.run-id
+      # the gate, download and re-run steps from Step 3, with
+      # RUN_ID: inputs.run-id and HEAD_SHA: inputs.head-sha
 ```
 
 ```yaml
@@ -388,7 +394,12 @@ jobs:
     uses: OWNER/AGENT-REPO/.github/workflows/rerun.yml@<commit-sha>
     with:
       run-id: ${{ github.event.workflow_run.id }}
+      head-sha: ${{ github.event.workflow_run.head_sha }}
 ```
+
+`github.event.workflow_run` is not available inside a `workflow_call`
+callee, so the caller passes the run id and head SHA as inputs. Keep the
+head-SHA check in the callee; it is what ties a re-run to the agent's commit.
 
 Adopters pin the caller to a commit, the same way `fullsend agent add` pins
 the harness. Move both pins together when releasing. If the organization
