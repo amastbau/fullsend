@@ -1130,6 +1130,60 @@ func TestDistinctForges_SingleForge(t *testing.T) {
 	assert.Equal(t, []string{"github"}, forges)
 }
 
+func TestDistinctForgesFor(t *testing.T) {
+	m := &Manifest{
+		Version: 1,
+		GitHub: &PlatformConfig{
+			MintURL: "https://mint.example.com",
+			Repos:   []RepoEntry{{Name: "acme/api"}, {Name: "acme/web"}},
+		},
+		GitLab: &PlatformConfig{
+			URL:   "https://gitlab.example.com",
+			Repos: []RepoEntry{{Name: "gallen/integration-service"}, {Name: "acme/ml"}},
+		},
+	}
+
+	t.Run("empty filter returns both forges", func(t *testing.T) {
+		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, m.DistinctForgesFor(nil))
+		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, m.DistinctForgesFor([]string{}))
+	})
+
+	t.Run("gitlab-only filter", func(t *testing.T) {
+		assert.Equal(t, []string{ForgeGitLab}, m.DistinctForgesFor([]string{"gallen/integration-service"}))
+	})
+
+	t.Run("github-only filter", func(t *testing.T) {
+		assert.Equal(t, []string{ForgeGitHub}, m.DistinctForgesFor([]string{"acme/api"}))
+	})
+
+	t.Run("filter spanning both forges", func(t *testing.T) {
+		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, m.DistinctForgesFor([]string{"acme/api", "gallen/integration-service"}))
+	})
+
+	t.Run("glob filter matching only github", func(t *testing.T) {
+		assert.Equal(t, []string{ForgeGitHub}, m.DistinctForgesFor([]string{"acme/w*"}))
+	})
+
+	t.Run("unmatched filter returns empty", func(t *testing.T) {
+		assert.Empty(t, m.DistinctForgesFor([]string{"missing/repo"}))
+	})
+
+	t.Run("glob manifest entry selected by concrete filter", func(t *testing.T) {
+		globManifest := &Manifest{
+			Version: 1,
+			GitHub: &PlatformConfig{
+				MintURL: "https://mint.example.com",
+				Repos:   []RepoEntry{{Name: "acme/*"}},
+			},
+			GitLab: &PlatformConfig{
+				URL:   "https://gitlab.example.com",
+				Repos: []RepoEntry{{Name: "gallen/integration-service"}},
+			},
+		}
+		assert.Equal(t, []string{ForgeGitHub}, globManifest.DistinctForgesFor([]string{"acme/api"}))
+	})
+}
+
 func TestValidate_GitHubURL_DefaultsToGitHubCom(t *testing.T) {
 	m := Manifest{
 		Version: 1,

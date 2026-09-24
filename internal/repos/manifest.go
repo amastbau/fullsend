@@ -937,14 +937,47 @@ func resolveField(perRepo, platformDefault, builtinDefault string) string {
 // section containing repos are included. The order is deterministic
 // (github before gitlab).
 func (m *Manifest) DistinctForges() []string {
+	return m.DistinctForgesFor(nil)
+}
+
+// DistinctForgesFor returns the deduplicated set of forge names used by
+// repos matching filter. An empty filter returns DistinctForges(). The
+// order is deterministic (github before gitlab). A glob manifest entry
+// counts as selected when a concrete filter would be produced by
+// expanding it (for example entry "acme/*" and filter "acme/api").
+func (m *Manifest) DistinctForgesFor(filter []string) []string {
 	var forges []string
-	if m.GitHub != nil && len(m.GitHub.Repos) > 0 {
+	if platformEntriesMatchFilter(m.GitHub, filter) {
 		forges = append(forges, ForgeGitHub)
 	}
-	if m.GitLab != nil && len(m.GitLab.Repos) > 0 {
+	if platformEntriesMatchFilter(m.GitLab, filter) {
 		forges = append(forges, ForgeGitLab)
 	}
 	return forges
+}
+
+func platformEntriesMatchFilter(cfg *PlatformConfig, filter []string) bool {
+	if cfg == nil || len(cfg.Repos) == 0 {
+		return false
+	}
+	if len(filter) == 0 {
+		return true
+	}
+	for _, e := range cfg.Repos {
+		for _, pattern := range filter {
+			if ok, err := matchesPattern(pattern, e.Name); err == nil && ok {
+				return true
+			}
+			// A glob manifest entry ("acme/*") counts as selected when the
+			// filter names a concrete repo that would expand from it.
+			if isGlob(e.Name) {
+				if ok, err := matchesPattern(e.Name, pattern); err == nil && ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // HasForge reports whether any repo in the manifest resolves to the
