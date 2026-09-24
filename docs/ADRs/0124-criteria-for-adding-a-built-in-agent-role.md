@@ -1,5 +1,5 @@
 ---
-title: "115. Criteria for adding a built-in agent role"
+title: "124. Criteria for adding a built-in agent role"
 status: Accepted
 relates_to:
   - security-threat-model
@@ -12,7 +12,7 @@ topics:
   - security
 ---
 
-# 115. Criteria for adding a built-in agent role
+# 124. Criteria for adding a built-in agent role
 
 Date: 2026-09-24
 

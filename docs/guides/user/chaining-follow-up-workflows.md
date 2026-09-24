@@ -11,7 +11,7 @@ deployment, notify a channel, or feed the result into another workflow.
 This is one option, not a requirement: how you automate your own repository
 is up to you. It is the option that works today for actions no built-in role
 grants, because fullsend keeps control-plane write access out of agent roles
-([ADR 0115](../../ADRs/0115-criteria-for-adding-a-built-in-agent-role.md)).
+([ADR 0124](../../ADRs/0124-criteria-for-adding-a-built-in-agent-role.md)).
 
 ## Prerequisites
 
@@ -391,7 +391,7 @@ restricts which actions may run, the agent repository must be on the allowlist.
 
 ## See also
 
-- [ADR 0115](../../ADRs/0115-criteria-for-adding-a-built-in-agent-role.md) — the criteria for adding a built-in agent role
+- [ADR 0124](../../ADRs/0124-criteria-for-adding-a-built-in-agent-role.md) — the criteria for adding a built-in agent role
 - [Bring Your Own Agent](bring-your-own-agent.md) — building the agent whose result you consume
 - [Custom Agent Identity](custom-agent-identity.md) — when a role change is and is not needed
 - [GitHub Docs: `workflow_run`](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)

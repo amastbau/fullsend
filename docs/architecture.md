@@ -274,7 +274,7 @@ Identity is not the same as trust. An agent's identity lets it authenticate to e
   group justified in combination with the others, and a need beyond one
   agent. Roles with two or more write groups get the closest review. A need
   specific to one agent goes to a custom role on its author's standalone mint
-  ([ADR 0115](ADRs/0115-criteria-for-adding-a-built-in-agent-role.md)).
+  ([ADR 0124](ADRs/0124-criteria-for-adding-a-built-in-agent-role.md)).
 
 One concrete implementation option is [`oidcx`](https://github.com/oxidecomputer/oidcx): a service that accepts OIDC identity tokens and exchanges them for short-lived access tokens. It can mint tokens scoped to selected GitHub repositories and permissions, or to selected Oxide silos and permissions, and it also ships with a GitHub Action wrapper. In a Fullsend deployment, this can be used by the sandbox entrypoint to narrow a broad GitHub App identity down to only the specific permissions an agent needs for the current run.
 
@@ -311,7 +311,7 @@ The existing design principle is that [the repo is the coordinator](problems/age
   `fullsend-<agent>` artifact, and users who want to act on a result chain
   their own workflow on the shim's `workflow_run` event
   ([guide](guides/user/chaining-follow-up-workflows.md),
-  [ADR 0115](ADRs/0115-criteria-for-adding-a-built-in-agent-role.md)).
+  [ADR 0124](ADRs/0124-criteria-for-adding-a-built-in-agent-role.md)).
 - Per-repo **polling** complements webhook dispatch: `fullsend poll` uses poll
   input drivers to discover work from remote systems (Jira first), coordinates
   via source-native write-then-verify locks, and feeds the same dispatch pipeline
@@ -472,7 +472,7 @@ the inheritance model: fullsend defaults, then repo baseline (`config.base.yaml`
 
 **Open questions:**
 
-- How are new agent roles added, tested, and promoted to production? (See [testing-agents.md](problems/testing-agents.md).) (Functional tests provide a framework for testing agent roles against controlled fixtures — [ADR 0052](ADRs/0052-functional-tests-for-agent-pipelines.md). Admission criteria for a new built-in role are in [ADR 0115](ADRs/0115-criteria-for-adding-a-built-in-agent-role.md). Promotion workflow remains open.)
+- How are new agent roles added, tested, and promoted to production? (See [testing-agents.md](problems/testing-agents.md).) (Functional tests provide a framework for testing agent roles against controlled fixtures — [ADR 0052](ADRs/0052-functional-tests-for-agent-pipelines.md). Admission criteria for a new built-in role are in [ADR 0124](ADRs/0124-criteria-for-adding-a-built-in-agent-role.md). Promotion workflow remains open.)
 - Does the registry include version information, so we can roll back to a previous agent configuration?
 - How does the registry relate to the policy store — does policy reference registry entries, or are they independent?
 
