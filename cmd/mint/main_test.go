@@ -310,6 +310,18 @@ func TestRun_CustomPort(t *testing.T) {
 	}
 }
 
+func TestListenAddress(t *testing.T) {
+	t.Setenv("PORT", "9090")
+	t.Setenv("MINT_LISTEN_ADDR", "")
+	if got := listenAddress(); got != ":9090" {
+		t.Fatalf("default listen address = %q, want :9090", got)
+	}
+	t.Setenv("MINT_LISTEN_ADDR", "127.0.0.1:8080")
+	if got := listenAddress(); got != "127.0.0.1:8080" {
+		t.Fatalf("loopback listen address = %q, want 127.0.0.1:8080", got)
+	}
+}
+
 func TestRun_WithFallback(t *testing.T) {
 	pemDir := setupTestPEMDir(t)
 

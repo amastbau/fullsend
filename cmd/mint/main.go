@@ -71,13 +71,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
 	srv := &http.Server{
-		Addr:              ":" + port,
+		Addr:              listenAddress(),
 		Handler:           serverHandler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -92,11 +87,22 @@ func run(ctx context.Context) error {
 		srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("fullsend-mint starting on :%s (standalone mode)", port)
+	log.Printf("fullsend-mint starting on %s (standalone mode)", srv.Addr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
 	}
 	return nil
+}
+
+func listenAddress() string {
+	if addr := os.Getenv("MINT_LISTEN_ADDR"); addr != "" {
+		return addr
+	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	return ":" + port
 }
 
 func main() {

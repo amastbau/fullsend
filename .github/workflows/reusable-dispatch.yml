@@ -43,6 +43,16 @@ on:
         description: "Token mint URL for OIDC token exchange"
         required: true
         type: string
+      local_triage_mint:
+        description: "Run the standalone triage mint on this job's loopback interface"
+        required: false
+        type: boolean
+        default: false
+      local_triage_app_id:
+        description: "GitHub App ID for the runner-local triage mint"
+        required: false
+        type: string
+        default: ""
       gcp_region:
         description: "GCP region for Vertex AI"
         required: true
@@ -83,6 +93,8 @@ on:
       FULLSEND_GCP_PROJECT_ID:
         required: false
       FULLSEND_OPENAI_API_KEY:
+        required: false
+      FULLSEND_LOCAL_TRIAGE_APP_PEM:
         required: false
       OTEL_EXPORTER_OTLP_TRACES_HEADERS:
         description: >-
@@ -617,6 +629,8 @@ jobs:
           sparse-checkout: |
             .github/actions/
             .github/scripts/
+            cmd/mint/
+            internal/mintcore/
             internal/scaffold/fullsend-repo/
             action.yml
 
@@ -627,13 +641,61 @@ jobs:
           install_mode: ${{ inputs.install_mode }}
           source_repo: ${{ github.repository }}
 
+      - name: Set up Go for local triage mint
+        if: inputs.local_triage_mint
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: .defaults/cmd/mint/go.mod
+          cache: false
+
+      - name: Build local triage mint
+        if: inputs.local_triage_mint
+        run: |
+          set -euo pipefail
+          cd .defaults/cmd/mint
+          go build -o "$RUNNER_TEMP/fullsend-local-mint" .
+
+      - name: Start local triage mint
+        if: inputs.local_triage_mint
+        env:
+          LOCAL_TRIAGE_APP_ID: ${{ inputs.local_triage_app_id }}
+          LOCAL_TRIAGE_APP_PEM: ${{ secrets.FULLSEND_LOCAL_TRIAGE_APP_PEM }}
+          TARGET_REPO: ${{ github.repository }}
+          WORKFLOW_REPO: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$LOCAL_TRIAGE_APP_ID" =~ ^[0-9]+$ || -z "$LOCAL_TRIAGE_APP_PEM" ]]; then
+            echo "::error::Local triage mint requires an App ID and FULLSEND_LOCAL_TRIAGE_APP_PEM"
+            exit 1
+          fi
+          install -d -m 700 "$RUNNER_TEMP/fullsend-local-mint-pems"
+          (umask 077; printf '%s' "$LOCAL_TRIAGE_APP_PEM" > "$RUNNER_TEMP/fullsend-local-mint-pems/triage.pem")
+          unset LOCAL_TRIAGE_APP_PEM
+          export ROLE_APP_IDS
+          ROLE_APP_IDS=$(jq -nc --arg id "$LOCAL_TRIAGE_APP_ID" '{triage: $id}')
+          export PEM_DIR="$RUNNER_TEMP/fullsend-local-mint-pems"
+          export PER_REPO_WIF_REPOS="$TARGET_REPO"
+          export WORKFLOW_HOST_REPOS="$WORKFLOW_REPO"
+          export ALLOWED_WORKFLOW_FILES=reusable-dispatch.yml
+          export MINT_LISTEN_ADDR=127.0.0.1:8080
+          "$RUNNER_TEMP/fullsend-local-mint" > "$RUNNER_TEMP/fullsend-local-mint.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/fullsend-local-mint.pid"
+          for attempt in {1..30}; do
+            if curl --silent --fail http://127.0.0.1:8080/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::Local triage mint did not become healthy"
+          exit 1
+
       - name: Mint triage token
         id: app-token
         uses: ./.defaults/.github/actions/mint-token
         with:
           role: triage
           repos: ${{ steps.workspace.outputs.repo_name }}
-          mint_url: ${{ inputs.mint_url }}
+          mint_url: ${{ inputs.local_triage_mint && 'http://127.0.0.1:8080' || inputs.mint_url }}
 
       - name: Checkout target repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -691,8 +753,19 @@ jobs:
           status-repo: ${{ github.repository }}
           status-number: ${{ fromJSON(needs.route.outputs.event_payload).issue.number }}
           status-comment-id: ${{ fromJSON(needs.route.outputs.event_payload).comment.id }}
-          mint-url: ${{ inputs.mint_url }}
+          mint-url: ${{ inputs.local_triage_mint && 'http://127.0.0.1:8080' || inputs.mint_url }}
           pr-head-sha: ${{ fromJSON(needs.route.outputs.event_payload).pull_request.head.sha || '' }}
+
+      - name: Stop local triage mint
+        if: always() && inputs.local_triage_mint
+        run: |
+          set -euo pipefail
+          if [[ -f "$RUNNER_TEMP/fullsend-local-mint.pid" ]]; then
+            kill "$(< "$RUNNER_TEMP/fullsend-local-mint.pid")" || true
+          fi
+          if [[ -f "$RUNNER_TEMP/fullsend-local-mint-pems/triage.pem" ]]; then
+            rm -- "$RUNNER_TEMP/fullsend-local-mint-pems/triage.pem"
+          fi
 
   code:
     name: Code
