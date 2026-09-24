@@ -376,6 +376,12 @@ protected, masked CI/CD variable (`FULLSEND_FORGE_TOKEN`).
 > default branch, or keep the bot PAT at Maintainer (40), for dispatch
 > to keep working.
 >
+> **Update (#7665):** `repos install` now grants the poller
+> project-access-token user merge access (not push) on the protected
+> default branch when Developer-class merge/push is absent, and fails
+> closed if that grant is not possible. `repos status` reports
+> `protected-ref-pipeline` drift if the access is later removed.
+>
 > **Update (#7667):** a failed `CreatePipeline` (including that 403) now
 > fails the poll cycle after persisting retry state. The permission gap
 > is unchanged; the poll job no longer reports success when no agent

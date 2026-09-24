@@ -1822,6 +1822,205 @@ func TestIsProtectedBranch_UnexpectedStatus(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestGetProtectedBranch_AccessLevels(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+	userID := 42
+	groupID := 7
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/release%2Fv1", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"name": "release/v1",
+			"push_access_levels": []map[string]any{
+				{"access_level": 0, "user_id": nil, "group_id": nil},
+			},
+			"merge_access_levels": []map[string]any{
+				{"access_level": 40, "user_id": nil, "group_id": nil},
+				{"access_level": 30, "user_id": userID, "group_id": nil},
+				{"access_level": 30, "user_id": nil, "group_id": groupID},
+			},
+		})
+	})
+
+	rule, err := client.GetProtectedBranch(ctx, "myorg", "myrepo", "release/v1")
+	require.NoError(t, err)
+	require.NotNil(t, rule)
+	assert.Equal(t, "release/v1", rule.Name)
+	require.Len(t, rule.PushAccessLevels, 1)
+	assert.Equal(t, 0, rule.PushAccessLevels[0].AccessLevel)
+	require.Len(t, rule.MergeAccessLevels, 3)
+	assert.Equal(t, 40, rule.MergeAccessLevels[0].AccessLevel)
+	assert.Equal(t, 0, rule.MergeAccessLevels[0].UserID)
+	assert.Equal(t, userID, rule.MergeAccessLevels[1].UserID)
+	assert.Equal(t, groupID, rule.MergeAccessLevels[2].GroupID)
+}
+
+func TestGetProtectedBranch_NotProtected(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/dev", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	rule, err := client.GetProtectedBranch(ctx, "myorg", "myrepo", "dev")
+	require.NoError(t, err)
+	assert.Nil(t, rule)
+}
+
+func TestGetProtectedBranch_UnexpectedStatus(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	_, err := client.GetProtectedBranch(ctx, "myorg", "myrepo", "main")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get protected branch")
+}
+
+func TestGetProtectedBranch_DecodeError(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not-json"))
+	})
+
+	_, err := client.GetProtectedBranch(ctx, "myorg", "myrepo", "main")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode protected branch")
+}
+
+func TestGrantProtectedBranchMergeUser(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+	patched := false
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"name": "main",
+				"merge_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+				"push_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+			})
+		case http.MethodPatch:
+			patched = true
+			var body map[string]any
+			readJSONBody(t, r, &body)
+			allowed, ok := body["allowed_to_merge"].([]any)
+			require.True(t, ok)
+			require.Len(t, allowed, 1)
+			entry := allowed[0].(map[string]any)
+			assert.Equal(t, float64(99), entry["user_id"])
+			writeJSON(t, w, http.StatusOK, map[string]any{"name": "main"})
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	})
+
+	err := client.GrantProtectedBranchMergeUser(ctx, "myorg", "myrepo", "main", 99)
+	require.NoError(t, err)
+	assert.True(t, patched)
+}
+
+func TestGrantProtectedBranchMergeUser_Idempotent(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"name": "main",
+			"merge_access_levels": []map[string]any{
+				{"user_id": 99},
+			},
+		})
+	})
+
+	err := client.GrantProtectedBranchMergeUser(ctx, "myorg", "myrepo", "main", 99)
+	require.NoError(t, err)
+}
+
+func TestGrantProtectedBranchMergeUser_IdempotentPushUser(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"name": "main",
+			"push_access_levels": []map[string]any{
+				{"user_id": 99},
+			},
+		})
+	})
+
+	err := client.GrantProtectedBranchMergeUser(ctx, "myorg", "myrepo", "main", 99)
+	require.NoError(t, err)
+}
+
+func TestGrantProtectedBranchMergeUser_NotProtected(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	err := client.GrantProtectedBranchMergeUser(ctx, "myorg", "myrepo", "main", 99)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not protected")
+}
+
+func TestGrantProtectedBranchMergeUser_InvalidUser(t *testing.T) {
+	client, _ := setupTest(t)
+	err := client.GrantProtectedBranchMergeUser(context.Background(), "myorg", "myrepo", "main", 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid user ID")
+}
+
+func TestGrantProtectedBranchMergeUser_GetError(t *testing.T) {
+	client, mux := setupTest(t)
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	err := client.GrantProtectedBranchMergeUser(context.Background(), "myorg", "myrepo", "main", 99)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "grant protected branch merge")
+}
+
+func TestGrantProtectedBranchMergeUser_PatchError(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"name": "main",
+				"merge_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	})
+
+	err := client.GrantProtectedBranchMergeUser(ctx, "myorg", "myrepo", "main", 99)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "grant protected branch merge")
+}
+
 func TestGetOrgPlan_WithPlan(t *testing.T) {
 	client, mux := setupTest(t)
 	ctx := context.Background()

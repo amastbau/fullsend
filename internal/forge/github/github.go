@@ -4018,6 +4018,18 @@ func (c *LiveClient) IsProtectedBranch(ctx context.Context, owner, repo, branch 
 	return true, nil
 }
 
+// GetProtectedBranch is not supported on GitHub. GitHub Actions does not
+// gate workflow dispatch on protected-branch merge/push access the way
+// GitLab gates CreatePipeline.
+func (c *LiveClient) GetProtectedBranch(_ context.Context, _, _, _ string) (*forge.ProtectedBranchRule, error) {
+	return nil, forge.ErrNotSupported
+}
+
+// GrantProtectedBranchMergeUser is not supported on GitHub.
+func (c *LiveClient) GrantProtectedBranchMergeUser(_ context.Context, _, _, _ string, _ int) error {
+	return forge.ErrNotSupported
+}
+
 // CreatePipeline is not supported on GitHub.
 func (c *LiveClient) CreatePipeline(_ context.Context, _, _, _ string, _ map[string]string) (*forge.Pipeline, error) {
 	return nil, forge.ErrNotSupported

@@ -1017,21 +1017,106 @@ func (c *LiveClient) CreateProtectedCIVariable(ctx context.Context, owner, repo,
 // IsProtectedBranch checks whether the given branch has protection rules.
 // GitLab returns 200 if the branch is protected, 404 if not.
 func (c *LiveClient) IsProtectedBranch(ctx context.Context, owner, repo, branch string) (bool, error) {
+	rule, err := c.GetProtectedBranch(ctx, owner, repo, branch)
+	if err != nil {
+		return false, err
+	}
+	return rule != nil, nil
+}
+
+type gitlabProtectedAccess struct {
+	AccessLevel int  `json:"access_level"`
+	UserID      *int `json:"user_id"`
+	GroupID     *int `json:"group_id"`
+}
+
+func convertProtectedAccess(levels []gitlabProtectedAccess) []forge.ProtectedBranchAccess {
+	out := make([]forge.ProtectedBranchAccess, 0, len(levels))
+	for _, l := range levels {
+		a := forge.ProtectedBranchAccess{AccessLevel: l.AccessLevel}
+		if l.UserID != nil {
+			a.UserID = *l.UserID
+		}
+		if l.GroupID != nil {
+			a.GroupID = *l.GroupID
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+func userHasProtectedBranchAccess(rule *forge.ProtectedBranchRule, userID int) bool {
+	if rule == nil || userID <= 0 {
+		return false
+	}
+	for _, levels := range [][]forge.ProtectedBranchAccess{rule.MergeAccessLevels, rule.PushAccessLevels} {
+		for _, l := range levels {
+			if l.UserID == userID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// GetProtectedBranch returns push/merge access levels for a protected
+// branch. A nil rule means the branch is not protected.
+func (c *LiveClient) GetProtectedBranch(ctx context.Context, owner, repo, branch string) (*forge.ProtectedBranchRule, error) {
 	path := fmt.Sprintf("/projects/%s/protected_branches/%s",
 		projectPath(owner, repo), url.PathEscape(branch))
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return false, fmt.Errorf("check branch protection: %w", err)
-	}
-	if resp.StatusCode == http.StatusOK {
-		resp.Body.Close()
-		return true, nil
+		return nil, fmt.Errorf("get protected branch: %w", err)
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		resp.Body.Close()
-		return false, nil
+		return nil, nil
 	}
-	return false, fmt.Errorf("check branch protection: %w", checkStatus(resp, http.StatusOK))
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get protected branch: %w", checkStatus(resp, http.StatusOK))
+	}
+	var raw struct {
+		Name              string                  `json:"name"`
+		PushAccessLevels  []gitlabProtectedAccess `json:"push_access_levels"`
+		MergeAccessLevels []gitlabProtectedAccess `json:"merge_access_levels"`
+	}
+	if err := decodeJSON(resp, &raw); err != nil {
+		return nil, fmt.Errorf("decode protected branch: %w", err)
+	}
+	return &forge.ProtectedBranchRule{
+		Name:              raw.Name,
+		PushAccessLevels:  convertProtectedAccess(raw.PushAccessLevels),
+		MergeAccessLevels: convertProtectedAccess(raw.MergeAccessLevels),
+	}, nil
+}
+
+// GrantProtectedBranchMergeUser adds userID to allowed_to_merge on a
+// protected branch. No-op if the user already has merge or push access.
+func (c *LiveClient) GrantProtectedBranchMergeUser(ctx context.Context, owner, repo, branch string, userID int) error {
+	if userID <= 0 {
+		return fmt.Errorf("grant protected branch merge: invalid user ID %d", userID)
+	}
+	rule, err := c.GetProtectedBranch(ctx, owner, repo, branch)
+	if err != nil {
+		return fmt.Errorf("grant protected branch merge: %w", err)
+	}
+	if rule == nil {
+		return fmt.Errorf("grant protected branch merge: %s is not protected", branch)
+	}
+	if userHasProtectedBranchAccess(rule, userID) {
+		return nil
+	}
+	path := fmt.Sprintf("/projects/%s/protected_branches/%s",
+		projectPath(owner, repo), url.PathEscape(branch))
+	body := map[string]any{
+		"allowed_to_merge": []map[string]any{{"user_id": userID}},
+	}
+	resp, err := c.patch(ctx, path, body)
+	if err != nil {
+		return fmt.Errorf("grant protected branch merge: %w", err)
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1093,6 +1178,7 @@ type ProjectAccessToken struct {
 	Token     string `json:"token"`
 	ExpiresAt string `json:"expires_at,omitempty"`
 	Revoked   bool   `json:"revoked,omitempty"`
+	UserID    int    `json:"user_id,omitempty"`
 }
 
 // CreateProjectAccessToken creates a project access token with the given name,

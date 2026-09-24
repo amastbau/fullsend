@@ -104,9 +104,12 @@ then converges the project:
   `FULLSEND_FORGE_TOKEN`, then provisions the built-in role credentials.
   When those roles are ready, the same unflagged install enables `enforced`
   mode and deletes `FULLSEND_FORGE_TOKEN`; see the [CLI reference](../../cli/repos.md#gitlab-bot-token)
-  for the role-credential options, emergency rollback, and protected-branch
-  caveat. Missing role credentials are drift while the migration gate is
-  `enforced`.
+  for the role-credential options, emergency rollback, and how install
+  grants the poller merge access on a protected default branch when
+  Developer-class merge/push is not already allowed. Missing role
+  credentials are drift while the migration gate is `enforced`.
+  `repos status` reports `protected-ref-pipeline` drift if that pipeline
+  permission is later removed.
 * Creates two pipeline schedules: `fullsend slash poll` (every 5 minutes)
   and `fullsend event poll` (at minutes 2, 17, 32, 47). Re-running install
   reports either schedule as drift if it exists but has been disabled,
