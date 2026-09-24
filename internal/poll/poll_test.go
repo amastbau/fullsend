@@ -3,6 +3,7 @@ package poll
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -415,8 +416,12 @@ func TestRunRouterError(t *testing.T) {
 	router := &stubRouter{err: fmt.Errorf("routing failed")}
 	p := New(mc, router, "group/project", withTestSecret(Options{}))
 
-	if err := p.Run(context.Background()); err != nil {
-		t.Fatalf("Run() should not return error on router failure, got: %v", err)
+	err := p.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() should return error on router failure")
+	}
+	if !strings.Contains(err.Error(), "dispatch core error") {
+		t.Errorf("error = %q, want dispatch core error", err)
 	}
 }
 
@@ -435,13 +440,18 @@ func TestRunConversionErrorSkipsEvent(t *testing.T) {
 	router := &stubRouter{stages: []string{"triage"}}
 	p := New(mc, router, "group/project", withTestSecret(Options{}))
 
-	if err := p.Run(context.Background()); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	err := p.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() should return error when conversion fails")
 	}
 
 	// Conversion error → no pipelines created.
 	if mc.pipelineCounter != 0 {
 		t.Errorf("expected 0 pipelines for unresolvable actor, got %d", mc.pipelineCounter)
+	}
+	got, ok := mc.getPollState()
+	if !ok || got.FailedKeysFull["note-10"] != 1 {
+		t.Errorf("failed keys = %v, want note-10:1", got.FailedKeysFull)
 	}
 }
 
@@ -468,8 +478,8 @@ func TestRunAllEventsFailWatermarkNotAdvanced(t *testing.T) {
 	router := &stubRouter{stages: []string{"triage"}}
 	p := New(mc, router, "group/project", withTestSecret(Options{}))
 
-	if err := p.Run(context.Background()); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if err := p.Run(context.Background()); err == nil {
+		t.Fatal("Run() should return error when all events fail")
 	}
 
 	got, ok := mc.getPollState()
@@ -680,8 +690,8 @@ func TestRunLabelFailureRollback(t *testing.T) {
 	router := &stubRouter{stages: []string{"triage"}}
 	p := New(mc, router, "group/project", withTestSecret(Options{}))
 
-	if err := p.Run(context.Background()); err != nil {
-		t.Fatalf("Run() error: %v", err)
+	if err := p.Run(context.Background()); err == nil {
+		t.Fatal("Run() should return error when a label event fails conversion")
 	}
 
 	got, ok := mc.getPollState()
@@ -695,5 +705,103 @@ func TestRunLabelFailureRollback(t *testing.T) {
 				t.Error("expected ready-to-code to be rolled back from label state after dispatch failure")
 			}
 		}
+	}
+}
+
+func slashNoteFixture(t *testing.T, failedCount int, pipelineErr error) (*mockClient, *Poller, time.Time) {
+	t.Helper()
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-20 * time.Minute)
+	mc := newMockClient()
+	mc.pipelineErr = pipelineErr
+	mc.setPollState(persistedPollState{
+		LastPollAtFull: since.Format(time.RFC3339),
+		FailedKeysFull: map[string]int{"note-10": failedCount},
+	})
+	mc.issues = []Issue{
+		{IID: 1, Labels: []string{"bug"}, UpdatedAt: now, Author: UserRef{ID: 42}},
+	}
+	mc.notes[1] = []Note{
+		{ID: 10, Body: "/fs-triage handle this", CreatedAt: now, Author: UserRef{ID: 42, Username: "alice"}},
+	}
+	mc.memberLevel[42] = 30
+	mc.issue[1] = &Issue{IID: 1, Author: UserRef{ID: 42}}
+
+	router := &stubRouter{stages: []string{"triage"}}
+	p := New(mc, router, "group/project", withTestSecret(Options{PipelineRef: "main"}))
+	return mc, p, since
+}
+
+func TestRunLastRetrySurfacesDrop(t *testing.T) {
+	mc, p, _ := slashNoteFixture(t, maxEventRetries-1, fmt.Errorf("API error: 403 forbidden"))
+
+	err := p.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run() should return error on the last retry")
+	}
+	if !strings.Contains(err.Error(), "dispatch") {
+		t.Errorf("error = %q, want dispatch failure", err)
+	}
+	if !strings.Contains(err.Error(), "exhausted retry budget") {
+		t.Errorf("error = %q, want exhausted retry budget drop", err)
+	}
+	if mc.pipelineCounter != 0 {
+		t.Errorf("expected 0 pipelines, got %d", mc.pipelineCounter)
+	}
+
+	got, ok := mc.getPollState()
+	if !ok || got.FailedKeysFull["note-10"] != maxEventRetries {
+		t.Errorf("failed keys = %v, want note-10:%d", got.FailedKeysFull, maxEventRetries)
+	}
+}
+
+func TestRunAlreadyDroppedEventDoesNotFailCycle(t *testing.T) {
+	mc, p, since := slashNoteFixture(t, maxEventRetries, nil)
+
+	if err := p.Run(context.Background()); err != nil {
+		t.Fatalf("Run() should succeed when skipping an already-dropped event, got: %v", err)
+	}
+	if mc.pipelineCounter != 0 {
+		t.Errorf("expected 0 pipelines for dropped event, got %d", mc.pipelineCounter)
+	}
+
+	got, ok := mc.getPollState()
+	if !ok {
+		t.Fatal("expected poll state to be persisted")
+	}
+	if got.LastPollAtFull == "" || got.LastPollAtFull == since.Format(time.RFC3339) {
+		t.Error("watermark should advance past a dropped event so the poller does not stall")
+	}
+}
+
+func TestRecordEventFailure(t *testing.T) {
+	failedKeys := map[string]int{"note-1": maxEventRetries - 1}
+	var cycleErrs []error
+	var minFailedAt time.Time
+	failedLabels := make(map[int]map[string]bool)
+	event := RoutableEvent{
+		Type:         "issue_label",
+		IID:          7,
+		NoteID:       1,
+		ChangedLabel: "ready-to-code",
+		UpdatedAt:    time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC),
+	}
+
+	recordEventFailure(&cycleErrs, failedKeys, event, &minFailedAt, failedLabels, fmt.Errorf("dispatch boom"))
+
+	if failedKeys["note-1"] != maxEventRetries {
+		t.Errorf("count = %d, want %d", failedKeys["note-1"], maxEventRetries)
+	}
+	if len(cycleErrs) != 2 {
+		t.Fatalf("cycleErrs = %v, want cause + drop", cycleErrs)
+	}
+	if !strings.Contains(cycleErrs[1].Error(), "exhausted retry budget") {
+		t.Errorf("second error = %q, want drop", cycleErrs[1])
+	}
+	if !minFailedAt.Equal(event.UpdatedAt) {
+		t.Errorf("minFailedAt = %v, want %v", minFailedAt, event.UpdatedAt)
+	}
+	if !failedLabels[7]["ready-to-code"] {
+		t.Error("label failure not tracked")
 	}
 }
