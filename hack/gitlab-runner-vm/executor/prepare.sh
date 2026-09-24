@@ -66,13 +66,15 @@ STATE_DIR="${HOME}/.local/state/gitlab-runner"
 mkdir -p "${STATE_DIR}"
 STATE_FILE="${STATE_DIR}/container-${JOB_ID}"
 
-# Per-job OpenShell gateway: reap leftovers from a killed prior job before
-# prune/pull so leftover sandboxes cannot pin image layers. The job image
-# pull below is still required before ensure_job_openshell_gateway, which
-# reads the job's OpenShell pin from it.
+# Reap leftovers from a killed prior job before prune/pull: an OpenShell
+# sandbox cannot pin image layers, and a leftover runner-* container stuck
+# non-exited would otherwise pin podman-prune.sh's in-flight check forever
+# (#7663). The job image pull below is still required before
+# ensure_job_openshell_gateway, which reads the job's OpenShell pin from it.
 # shellcheck source=gateway.sh
 source "$(dirname "${BASH_SOURCE[0]}")/gateway.sh"
 reap_orphaned_openshell
+reap_orphaned_runner_containers "${CONTAINER_NAME}"
 
 mkdir -p "${BUILDS_DIR}" "${CACHE_DIR}"
 
@@ -92,8 +94,11 @@ if podman container exists "${CONTAINER_NAME}" 2>/dev/null; then
   fi
 fi
 
-# Reclaim unused images so this pull has disk headroom (#7663).
-prune_unused_podman_storage
+# Reclaim unused images so this pull has disk headroom (#7663). Protect this
+# job's own image: the keep-file only lists the provision-time warm cache,
+# and `podman images` lists newest-first, so a cached copy of ${IMAGE} could
+# otherwise be the first rmi target right before the pull below needs it.
+prune_unused_podman_storage "${IMAGE}"
 
 echo "Pulling image: ${IMAGE}"
 podman pull -- "${IMAGE}"

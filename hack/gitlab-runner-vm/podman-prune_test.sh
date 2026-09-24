@@ -229,6 +229,30 @@ else
   fail "missing keep-file path mismatch: ${RUN_PRUNE_OUT} log=$(tr '\n' '|' < "${PODMAN_LOG}")"
 fi
 
+echo "== extra keep-ref protects the job's own image =="
+reset_prune_fixtures
+: > "${PS_A_FILE}"
+cat > "${IMAGES_FILE}" <<'IMAGES'
+ghcr.io/fullsend-ai/fullsend-runner:v1
+registry.example.com/job:latest
+ghcr.io/nvidia/openshell/supervisor:0.0.116
+IMAGES
+RUN_PRUNE_RC=0
+RUN_PRUNE_OUT=$(
+  FULLSEND_PODMAN_KEEP_IMAGES="${KEEP_FILE}" \
+  FULLSEND_PODMAN_PRUNE_EXTRA_KEEP="registry.example.com/job:latest" \
+  bash "${PRUNE}"
+) && RUN_PRUNE_RC=0 || RUN_PRUNE_RC=$?
+if [ "${RUN_PRUNE_RC}" -ne 0 ]; then
+  fail "extra keep-ref run should succeed (rc=${RUN_PRUNE_RC}): ${RUN_PRUNE_OUT}"
+elif logged 'rmi -- registry.example.com/job:latest'; then
+  fail "extra keep-ref did not protect the job's own image: $(tr '\n' '|' < "${PODMAN_LOG}")"
+elif printf '%s' "${RUN_PRUNE_OUT}" | grep -Fq 'keeping registry.example.com/job:latest'; then
+  pass "FULLSEND_PODMAN_PRUNE_EXTRA_KEEP protects a ref not in the keep-file"
+else
+  fail "extra keep-ref output mismatch: ${RUN_PRUNE_OUT}"
+fi
+
 echo "== unrelated running container does not skip =="
 reset_prune_fixtures
 printf 'buildkit|running\n' > "${PS_A_FILE}"

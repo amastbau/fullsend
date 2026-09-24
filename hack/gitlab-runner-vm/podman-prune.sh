@@ -13,7 +13,10 @@
 # - Does not pass -f to podman rmi, so an image that becomes in-use
 #   between listing and removal is left alone.
 # - Tagged images listed in the keep-file (the warm cache setup.sh
-#   pre-pulled) are never removed.
+#   pre-pulled) are never removed. FULLSEND_PODMAN_PRUNE_EXTRA_KEEP, when
+#   set, protects one additional ref for that invocation only (gateway.sh's
+#   prune_unused_podman_storage uses this to protect the job's own image
+#   during prepare.sh's pre-pull prune).
 #
 # Idempotent: safe to re-run; a clean host is a no-op.
 set -euo pipefail
@@ -51,6 +54,13 @@ job_in_flight() {
 
 is_keep_ref() {
   local ref="$1" line
+  # A caller-supplied extra ref (e.g. prepare.sh protecting the job's own
+  # image for its pre-pull invocation) is checked before the persistent
+  # keep-file so it applies even on a call with a valid but non-matching
+  # keep-file.
+  if [ -n "${FULLSEND_PODMAN_PRUNE_EXTRA_KEEP:-}" ] && [ "${ref}" = "${FULLSEND_PODMAN_PRUNE_EXTRA_KEEP}" ]; then
+    return 0
+  fi
   [ -f "${KEEP_FILE}" ] || return 1
   while IFS= read -r line || [ -n "${line}" ]; do
     case "${line}" in

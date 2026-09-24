@@ -74,11 +74,20 @@ user_systemctl() {
 # Reclaim unused rootless Podman storage. Installed by setup.sh
 # (install_podman_prune); no-op on VMs that have not been re-provisioned.
 # timeout + || true: never fail the job stage if prune is slow or errors.
+#
+# $1, if given, is an extra image ref (repository:tag) to protect for this
+# invocation only, on top of the persistent keep-file. prepare.sh passes the
+# job's own image: the keep-file only lists the provision-time warm cache
+# (RUNNER_IMAGE, OpenShell supervisor), not CUSTOM_ENV_CI_JOB_IMAGE, and
+# `podman images` lists newest-first — a cached copy of the image about to
+# be pulled is a plausible rmi target otherwise, forcing a re-pull right
+# after the prune that was supposed to make room for it (#7663).
 prune_unused_podman_storage() {
   local prune="${HOME}/.local/lib/fullsend/podman-prune.sh"
+  local extra_keep="${1:-}"
   if [ -x "${prune}" ]; then
     echo "Pruning unused Podman storage"
-    timeout --kill-after=5 30 "${prune}" || true
+    FULLSEND_PODMAN_PRUNE_EXTRA_KEEP="${extra_keep}" timeout --kill-after=5 30 "${prune}" || true
   fi
 }
 
@@ -184,6 +193,34 @@ teardown_openshell_gateway() {
 reap_orphaned_openshell() {
   echo "Reaping leftover OpenShell gateway/sandboxes from a previous job"
   teardown_openshell_gateway
+}
+
+# Reap a leftover job container from an abruptly killed prior job (runner
+# process crash, timeout kill — cleanup.sh never ran). $1 is the container
+# name this job is about to create; it is excluded even though it cannot
+# exist yet, for clarity at the call site.
+#
+# These VMs register exactly one runner with the default concurrency of 1
+# (see setup.sh's patch_config: "Single-runner VM assumption"), so any other
+# runner-* container found here belongs to a job GitLab already considers
+# finished — it can only be a leftover. Without this reap, a leftover stuck
+# in a non-exited state pins podman-prune.sh's job_in_flight() check forever:
+# prepare.sh, cleanup.sh, and the hourly timer would all skip the entire
+# reclaim (container prune, dangling images, and tagged-image rmi)
+# indefinitely, reproducing the disk-exhaustion failure mode (#7663).
+reap_orphaned_runner_containers() {
+  command -v podman >/dev/null 2>&1 || return 0
+  local keep="${1:-}" name
+  while IFS= read -r name; do
+    [ -n "${name}" ] || continue
+    case "${name}" in
+      runner-*)
+        [ "${name}" = "${keep}" ] && continue
+        echo "Removing leftover job container: ${name}"
+        podman rm -f -- "${name}" 2>/dev/null || true
+        ;;
+    esac
+  done < <(podman ps -a --format '{{.Names}}' 2>/dev/null || true)
 }
 
 wait_for_openshell_gateway() {
