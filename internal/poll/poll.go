@@ -267,7 +267,8 @@ func (p *Poller) Run(ctx context.Context) error {
 	// Pipelines were already created via API — if this persist fails,
 	// events may re-dispatch on the next cycle (at-least-once delivery).
 	if err := p.persistCycleState(ctx, p.owner, p.repo, previouslyDispatched, &newWatermark, failedKeys, labelState); err != nil {
-		return fmt.Errorf("persist poll state: %w", errors.Join(err, errors.Join(cycleErrs...)))
+		cycleErrs = append(cycleErrs, fmt.Errorf("persist poll state: %w", err))
+		return fmt.Errorf("poll cycle: %w", errors.Join(cycleErrs...))
 	}
 
 	log.Printf("poll complete: %d events discovered, %d dispatched", len(events), dispatched)
