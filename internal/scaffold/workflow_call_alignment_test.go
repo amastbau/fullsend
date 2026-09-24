@@ -416,6 +416,44 @@ func TestProjectNumberInputsAreOptional(t *testing.T) {
 		"prioritize job should thread project_number to PRIORITIZE_PROJECT_NUMBER env var")
 }
 
+// TestSetupGCPAllowsOpenAIOnlyRuns ensures a repository that uses OpenAI
+// credentials does not attempt Google authentication merely because it uses a
+// reusable Fullsend workflow.
+func TestSetupGCPAllowsOpenAIOnlyRuns(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", ".github", "actions", "setup-gcp", "action.yml"))
+	require.NoError(t, err)
+
+	var action struct {
+		Inputs map[string]workflowInput `yaml:"inputs"`
+		Runs   struct {
+			Steps []struct {
+				Name string `yaml:"name"`
+				If   string `yaml:"if"`
+			} `yaml:"steps"`
+		} `yaml:"runs"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &action))
+
+	provider, ok := action.Inputs["gcp_wif_provider"]
+	require.True(t, ok)
+	assert.False(t, provider.Required, "OpenAI-only repositories must be able to omit a GCP WIF provider")
+
+	guarded := map[string]bool{
+		"Pre-mask GCP credential file path": false,
+		"Authenticate to Google Cloud (WIF)":  false,
+		"Mask GCP credential file paths":     false,
+		"Prepare sandbox credentials":         false,
+	}
+	for _, step := range action.Runs.Steps {
+		if _, ok := guarded[step.Name]; ok {
+			guarded[step.Name] = step.If == "inputs.gcp_wif_provider != ''"
+		}
+	}
+	for name, hasGuard := range guarded {
+		assert.True(t, hasGuard, "%s must skip when no GCP WIF provider is configured", name)
+	}
+}
+
 // TestReusableDispatchFixInstructionNormalizesCRLF validates that CRLF line endings
 // in a comment body are stripped before the fix instruction is written to GITHUB_OUTPUT.
 func TestReusableDispatchFixInstructionNormalizesCRLF(t *testing.T) {
