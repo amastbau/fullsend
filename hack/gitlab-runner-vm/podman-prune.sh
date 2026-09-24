@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Prune unused rootless Podman containers and images on a GitLab runner VM.
+#
+# Long-lived runners accumulate superseded job images until the root
+# filesystem fills (issue #7663). This script is the ExecStart of the
+# systemd --user timer installed by setup.sh.
+#
+# Safety:
+# - Never stops or force-removes a running container.
+# - Skips the whole run when a job-related container is in-flight
+#   (running, created, paused, restarting) so we cannot race prepare.sh's
+#   create→start window or contend with an active job.
+# - Does not pass -f to podman rmi, so an image that becomes in-use
+#   between listing and removal is left alone.
+# - Tagged images listed in the keep-file (the warm cache setup.sh
+#   pre-pulled) are never removed.
+#
+# Idempotent: safe to re-run; a clean host is a no-op.
+set -euo pipefail
+
+KEEP_FILE="${FULLSEND_PODMAN_KEEP_IMAGES:-${HOME}/.config/fullsend-gitlab-runner/keep-images}"
+# Stopped leftovers older than this may be reaped. prepare.sh's create→start
+# window is milliseconds; 30m is well above that and still reclaims images
+# held by killed-job containers that cleanup.sh never saw.
+CONTAINER_UNTIL="${FULLSEND_PODMAN_PRUNE_UNTIL:-30m}"
+
+log() { echo "==> $*"; }
+
+# True when a runner-* / openshell-* container is not already stopped.
+# Created-but-not-started counts as in-flight: prepare.sh writes the
+# container then starts it, and container prune would delete it in between.
+job_in_flight() {
+  local name state
+  while IFS='|' read -r name state; do
+    [ -n "${name}" ] || continue
+    case "${name}" in
+      runner-*|openshell-*) ;;
+      *) continue ;;
+    esac
+    state=$(printf '%s' "${state}" | tr '[:upper:]' '[:lower:]')
+    case "${state}" in
+      exited|stopped|dead) ;;
+      *)
+        log "skipping prune: in-flight job container ${name} (${state})"
+        return 0
+        ;;
+    esac
+  done < <(podman ps -a --format '{{.Names}}|{{.State}}' 2>/dev/null || true)
+  return 1
+}
+
+is_keep_ref() {
+  local ref="$1" line
+  [ -f "${KEEP_FILE}" ] || return 1
+  while IFS= read -r line || [ -n "${line}" ]; do
+    case "${line}" in
+      ''|\#*) continue ;;
+    esac
+    if [ "${line}" = "${ref}" ]; then
+      return 0
+    fi
+  done < "${KEEP_FILE}"
+  return 1
+}
+
+# Remove tagged images that are not in the keep-file. Dangling images are
+# handled by `podman image prune`; images in use fail rmi without -f.
+prune_unused_tagged_images() {
+  local ref
+  if [ ! -f "${KEEP_FILE}" ]; then
+    log "keep-file ${KEEP_FILE} missing — skipping tagged-image removal"
+    return 0
+  fi
+  while IFS= read -r ref; do
+    [ -n "${ref}" ] || continue
+    case "${ref}" in
+      *'<none>') continue ;;
+    esac
+    if is_keep_ref "${ref}"; then
+      log "keeping ${ref}"
+      continue
+    fi
+    log "removing unused image ${ref}"
+    podman rmi -- "${ref}" 2>/dev/null || true
+  done < <(podman images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
+}
+
+if ! command -v podman >/dev/null 2>&1; then
+  echo "ERROR: podman not found in PATH" >&2
+  exit 1
+fi
+
+if job_in_flight; then
+  exit 0
+fi
+
+log "pruning stopped containers older than ${CONTAINER_UNTIL}"
+podman container prune -f --filter "until=${CONTAINER_UNTIL}" || true
+
+log "pruning dangling images"
+podman image prune -f || true
+
+log "pruning unused tagged images (preserving keep-file)"
+prune_unused_tagged_images
+
+log "podman prune complete"

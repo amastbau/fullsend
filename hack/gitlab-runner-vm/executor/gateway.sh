@@ -20,6 +20,9 @@
 # The expensive image layers (runner image, supervisor) stay in the VM's
 # Podman cache. Only the CLI (~39 MB) and a version-skewed supervisor
 # (~30 MB) are fetched when the job's pin differs from the host.
+# Unused superseded images are reclaimed by podman-prune.sh (hourly
+# timer plus a call from prepare/cleanup) so the ~30 GiB root disk
+# cannot fill (#7663).
 
 # Renovate-tracked pin for the OpenShell version/commit this host trusts,
 # read from .github/scripts/openshell-version.sh (the same file
@@ -66,6 +69,17 @@ ensure_user_systemd_env() {
 user_systemctl() {
   ensure_user_systemd_env
   command systemctl --user "$@"
+}
+
+# Reclaim unused rootless Podman storage. Installed by setup.sh
+# (install_podman_prune); no-op on VMs that have not been re-provisioned.
+# timeout + || true: never fail the job stage if prune is slow or errors.
+prune_unused_podman_storage() {
+  local prune="${HOME}/.local/lib/fullsend/podman-prune.sh"
+  if [ -x "${prune}" ]; then
+    echo "Pruning unused Podman storage"
+    timeout --kill-after=5 30 "${prune}" || true
+  fi
 }
 
 # OpenShell's systemd user unit sets StateDirectory=openshell/gateway, which

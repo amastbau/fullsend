@@ -7,6 +7,7 @@
 #   - rootless Podman + an OCI hook that injects the host CA bundle
 #   - OpenShell CLI (pinned) and a per-job gateway (no long-lived daemon)
 #   - pre-pulled runner + supervisor images
+#   - a user systemd timer that prunes unused Podman images (#7663)
 #
 # Idempotent: safe to re-run, and must stay that way. Each step is guarded
 # (version checks, grep-for-existing-config, early returns) so a second run
@@ -810,6 +811,71 @@ prepull_images() {
 }
 
 # --------------------------------------------------------------------------
+# 8b. Periodic Podman prune (user systemd timer)
+# --------------------------------------------------------------------------
+# Long-lived VMs accumulate superseded rootless images until the ~30 GiB
+# root disk fills (#7663). A user-level timer reclaims unused images and
+# stopped leftovers without touching in-flight job containers. Re-running
+# setup.sh on an already-provisioned VM installs the timer (idempotent).
+install_podman_prune() {
+  info "Installing Podman prune timer"
+
+  local src="${SCRIPT_DIR}/podman-prune.sh"
+  if [ ! -f "${src}" ]; then
+    fail "podman-prune.sh not found: ${src}"
+  fi
+
+  local libdir="${HOME}/.local/lib/fullsend"
+  local unitdir="${HOME}/.config/systemd/user"
+  local keepdir="${HOME}/.config/fullsend-gitlab-runner"
+  mkdir -p "${libdir}" "${unitdir}" "${keepdir}"
+
+  cp "${src}" "${libdir}/podman-prune.sh"
+  chmod +x "${libdir}/podman-prune.sh"
+
+  local supervisor="ghcr.io/nvidia/openshell/supervisor:${OPENSHELL_VERSION}"
+  cat > "${keepdir}/keep-images" <<EOF
+# Warm-cache images pre-pulled by setup.sh. podman-prune.sh will not rmi these.
+${RUNNER_IMAGE}
+${supervisor}
+EOF
+
+  cat > "${unitdir}/fullsend-podman-prune.service" <<'EOF'
+[Unit]
+Description=Prune unused rootless Podman images on the GitLab runner
+After=podman.socket
+
+[Service]
+Type=oneshot
+Nice=19
+ExecStart=%h/.local/lib/fullsend/podman-prune.sh
+EOF
+
+  cat > "${unitdir}/fullsend-podman-prune.timer" <<'EOF'
+[Unit]
+Description=Periodically prune unused rootless Podman images on the GitLab runner
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+RandomizedDelaySec=5min
+Unit=fullsend-podman-prune.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  user_systemctl daemon-reload
+  user_systemctl enable --now fullsend-podman-prune.timer
+  # Asynchronous first run so already-full VMs reclaim space without
+  # waiting for OnBootSec. --no-block keeps setup.sh from waiting on a
+  # multi-gigabyte prune.
+  user_systemctl start --no-block fullsend-podman-prune.service || true
+  ok "podman prune timer enabled"
+}
+
+# --------------------------------------------------------------------------
 # 9. Verify
 # --------------------------------------------------------------------------
 verify() {
@@ -838,6 +904,12 @@ verify() {
     ok "podman socket active"
   else
     echo "  WARN: podman socket not active"; errors=$((errors + 1))
+  fi
+
+  if user_systemctl is-enabled --quiet fullsend-podman-prune.timer; then
+    ok "podman prune timer enabled"
+  else
+    echo "  WARN: podman prune timer not enabled"; errors=$((errors + 1))
   fi
 
   if systemctl is-active --quiet gitlab-runner; then
@@ -936,5 +1008,6 @@ configure_per_job_gateway
 install_executor
 patch_config
 prepull_images
+install_podman_prune
 sudo systemctl restart gitlab-runner
 verify

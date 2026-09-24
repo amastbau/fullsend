@@ -66,31 +66,21 @@ STATE_DIR="${HOME}/.local/state/gitlab-runner"
 mkdir -p "${STATE_DIR}"
 STATE_FILE="${STATE_DIR}/container-${JOB_ID}"
 
-echo "Pulling image: ${IMAGE}"
-podman pull -- "${IMAGE}"
-
-# Per-job OpenShell gateway: reap leftovers from a killed prior job, then
-# start a version-matched gateway with an empty profile registry. The image
-# pull above is required so we can read the job's OpenShell pin from it.
+# Per-job OpenShell gateway: reap leftovers from a killed prior job before
+# prune/pull so leftover sandboxes cannot pin image layers. The job image
+# pull below is still required before ensure_job_openshell_gateway, which
+# reads the job's OpenShell pin from it.
 # shellcheck source=gateway.sh
 source "$(dirname "${BASH_SOURCE[0]}")/gateway.sh"
 reap_orphaned_openshell
-ensure_job_openshell_gateway "${IMAGE}" || {
-  echo "ERROR: failed to start a per-job OpenShell gateway" >&2
-  exit 1
-}
 
 mkdir -p "${BUILDS_DIR}" "${CACHE_DIR}"
-
-# --network=host is required so the container can reach the OpenShell gateway.
-# The host CA trust bundle is injected into containers via the OCI createRuntime
-# hook (install_ca_hook in setup.sh). Gateway mTLS credentials are mounted
-# read-only from the runner user's OpenShell config.
-OPENSHELL_CONFIG="${HOME}/.config/openshell"
 
 # Job ids are unique per runner, so a container of this name can only be a
 # stopped leftover from an earlier failed stage. Use plain `podman rm` (no -f):
 # it refuses a running container atomically, with no inspect/rm window.
+# Drop it before prune so it cannot pin layers the upcoming pull needs space
+# for, and so prune's in-flight check does not skip on this leftover.
 if podman container exists "${CONTAINER_NAME}" 2>/dev/null; then
   if ! rm_err=$(podman rm "${CONTAINER_NAME}" 2>&1); then
     if podman inspect --format '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -q true; then
@@ -101,6 +91,23 @@ if podman container exists "${CONTAINER_NAME}" 2>/dev/null; then
     exit 1
   fi
 fi
+
+# Reclaim unused images so this pull has disk headroom (#7663).
+prune_unused_podman_storage
+
+echo "Pulling image: ${IMAGE}"
+podman pull -- "${IMAGE}"
+
+ensure_job_openshell_gateway "${IMAGE}" || {
+  echo "ERROR: failed to start a per-job OpenShell gateway" >&2
+  exit 1
+}
+
+# --network=host is required so the container can reach the OpenShell gateway.
+# The host CA trust bundle is injected into containers via the OCI createRuntime
+# hook (install_ca_hook in setup.sh). Gateway mTLS credentials are mounted
+# read-only from the runner user's OpenShell config.
+OPENSHELL_CONFIG="${HOME}/.config/openshell"
 
 OPENSHELL_MOUNT=()
 if [ -d "${OPENSHELL_CONFIG}" ]; then
