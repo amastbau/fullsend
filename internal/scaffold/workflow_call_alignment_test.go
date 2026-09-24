@@ -439,10 +439,10 @@ func TestSetupGCPAllowsOpenAIOnlyRuns(t *testing.T) {
 	assert.False(t, provider.Required, "OpenAI-only repositories must be able to omit a GCP WIF provider")
 
 	guarded := map[string]bool{
-		"Pre-mask GCP credential file path": false,
-		"Authenticate to Google Cloud (WIF)":  false,
+		"Pre-mask GCP credential file path":  false,
+		"Authenticate to Google Cloud (WIF)": false,
 		"Mask GCP credential file paths":     false,
-		"Prepare sandbox credentials":         false,
+		"Prepare sandbox credentials":        false,
 	}
 	for _, step := range action.Runs.Steps {
 		if _, ok := guarded[step.Name]; ok {
