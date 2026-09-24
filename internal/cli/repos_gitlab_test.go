@@ -1537,6 +1537,10 @@ func TestAnnotateGitLabRoleLifecycleReportsPipelineRefDrift(t *testing.T) {
 			"push_access_levels":  []map[string]any{{"access_level": 40}},
 		})
 	})
+	mux.HandleFunc("/api/v4/projects/group%2Fproject/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
@@ -1593,6 +1597,10 @@ func TestAnnotateGitLabRoleLifecycleReportsPipelineRefWithoutRoleMode(t *testing
 			"push_access_levels":  []map[string]any{{"access_level": 40}},
 		})
 	})
+	mux.HandleFunc("/api/v4/projects/group%2Fproject/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
+	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
@@ -1645,6 +1653,10 @@ func TestAnnotateGitLabRoleLifecyclePipelineRefWithoutTokenList(t *testing.T) {
 			"merge_access_levels": []map[string]any{{"access_level": 40}},
 			"push_access_levels":  []map[string]any{{"access_level": 40}},
 		})
+	})
+	mux.HandleFunc("/api/v4/projects/group%2Fproject/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
