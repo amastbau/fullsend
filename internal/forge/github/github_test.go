@@ -4484,6 +4484,14 @@ func TestUnsupportedMethods(t *testing.T) {
 	client := New("test-token")
 	ctx := context.Background()
 
+	t.Run("GetProtectedBranch", func(t *testing.T) {
+		_, err := client.GetProtectedBranch(ctx, "o", "r", "main")
+		assert.ErrorIs(t, err, forge.ErrNotSupported)
+	})
+	t.Run("GrantProtectedBranchMergeUser", func(t *testing.T) {
+		err := client.GrantProtectedBranchMergeUser(ctx, "o", "r", "main", 1)
+		assert.ErrorIs(t, err, forge.ErrNotSupported)
+	})
 	t.Run("CreatePipeline", func(t *testing.T) {
 		_, err := client.CreatePipeline(ctx, "o", "r", "main", nil)
 		assert.ErrorIs(t, err, forge.ErrNotSupported)

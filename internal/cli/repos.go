@@ -1236,6 +1236,18 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 				}
 				roleFailedRepos = append(roleFailedRepos, item.r)
 			}
+			if item.r.Error != nil {
+				continue
+			}
+			if err := ensureGitLabPollerPipelineAccess(ctx, fc.Client, gitLabTokenInventory(opts, fc.Client), printer, item.r.Owner, item.r.Repo, opts.dryRun); err != nil {
+				printer.StepWarn(fmt.Sprintf("[%s/%s] GitLab poller protected-ref pipeline access failed: %v", item.r.Owner, item.r.Repo, err))
+				roleFail++
+				item.r.Error = err
+				if item.fresh {
+					roleFailInstalledCount++
+				}
+				roleFailedRepos = append(roleFailedRepos, item.r)
+			}
 		}
 	}
 
