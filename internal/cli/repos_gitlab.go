@@ -328,6 +328,16 @@ func annotateGitLabRoleLifecycle(ctx context.Context, clients repos.ForgeClientF
 	now := time.Now()
 	for i := range result.Repos {
 		st := &result.Repos[i]
+		// A manifest can mix GitHub and GitLab entries. RepoStatus.Forge is
+		// populated by repos.Status() for every real status result; an
+		// empty value only occurs in hand-built test fixtures that predate
+		// this field, which are exercising GitLab-only scenarios. Skip
+		// anything explicitly resolved to a non-GitLab forge so GitHub
+		// owner/repo paths are never sent to the GitLab client (mirrors
+		// the forge gate in repos install's equivalent path).
+		if st.Forge != "" && st.Forge != repos.ForgeGitLab {
+			continue
+		}
 		hasRoleStatus := st.GitLabRoleMode != "" || len(st.GitLabRoleDiagnostics) > 0
 		toks, listErr := adapter.ListProjectAccessTokens(ctx, st.Owner, st.Repo)
 		if listErr != nil {

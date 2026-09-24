@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/fullsend-ai/fullsend/internal/forge"
@@ -1059,9 +1060,43 @@ func userHasProtectedBranchAccess(rule *forge.ProtectedBranchRule, userID int) b
 	return false
 }
 
+type gitlabProtectedBranchRaw struct {
+	Name              string                  `json:"name"`
+	PushAccessLevels  []gitlabProtectedAccess `json:"push_access_levels"`
+	MergeAccessLevels []gitlabProtectedAccess `json:"merge_access_levels"`
+}
+
+func (raw gitlabProtectedBranchRaw) toRule() *forge.ProtectedBranchRule {
+	return &forge.ProtectedBranchRule{
+		Name:              raw.Name,
+		PushAccessLevels:  convertProtectedAccess(raw.PushAccessLevels),
+		MergeAccessLevels: convertProtectedAccess(raw.MergeAccessLevels),
+	}
+}
+
 // GetProtectedBranch returns push/merge access levels for a protected
 // branch. A nil rule means the branch is not protected.
+//
+// GitLab protects branches either by an exact-name rule or by a wildcard
+// rule (e.g. "*", "main*") that matches many branches at once. A wildcard
+// rule never creates a protected_branches record literally named after
+// the branch it protects, so an exact-name 404 does not necessarily mean
+// the branch is unprotected: it may only be reachable through a wildcard
+// rule. When the exact lookup 404s, this also checks the project's
+// protected-branch rules for a wildcard match before concluding the
+// branch is unprotected.
 func (c *LiveClient) GetProtectedBranch(ctx context.Context, owner, repo, branch string) (*forge.ProtectedBranchRule, error) {
+	rule, err := c.getProtectedBranchExact(ctx, owner, repo, branch)
+	if err != nil {
+		return nil, err
+	}
+	if rule != nil {
+		return rule, nil
+	}
+	return c.getProtectedBranchByWildcard(ctx, owner, repo, branch)
+}
+
+func (c *LiveClient) getProtectedBranchExact(ctx context.Context, owner, repo, branch string) (*forge.ProtectedBranchRule, error) {
 	path := fmt.Sprintf("/projects/%s/protected_branches/%s",
 		projectPath(owner, repo), url.PathEscape(branch))
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
@@ -1075,19 +1110,64 @@ func (c *LiveClient) GetProtectedBranch(ctx context.Context, owner, repo, branch
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get protected branch: %w", checkStatus(resp, http.StatusOK))
 	}
-	var raw struct {
-		Name              string                  `json:"name"`
-		PushAccessLevels  []gitlabProtectedAccess `json:"push_access_levels"`
-		MergeAccessLevels []gitlabProtectedAccess `json:"merge_access_levels"`
-	}
+	var raw gitlabProtectedBranchRaw
 	if err := decodeJSON(resp, &raw); err != nil {
 		return nil, fmt.Errorf("decode protected branch: %w", err)
 	}
-	return &forge.ProtectedBranchRule{
-		Name:              raw.Name,
-		PushAccessLevels:  convertProtectedAccess(raw.PushAccessLevels),
-		MergeAccessLevels: convertProtectedAccess(raw.MergeAccessLevels),
-	}, nil
+	return raw.toRule(), nil
+}
+
+// getProtectedBranchByWildcard lists the project's protected-branch rules
+// and returns the first one whose name is a wildcard pattern matching
+// branch. Used when no protected_branches record is literally named after
+// branch (e.g. a repo protected only via a "*" or "main*" rule).
+func (c *LiveClient) getProtectedBranchByWildcard(ctx context.Context, owner, repo, branch string) (*forge.ProtectedBranchRule, error) {
+	const perPage = 100
+	const maxPages = 100
+	proj := projectPath(owner, repo)
+	for page := 1; page <= maxPages; page++ {
+		path := fmt.Sprintf("/projects/%s/protected_branches?per_page=%d&page=%d", proj, perPage, page)
+		resp, err := c.get(ctx, path)
+		if err != nil {
+			return nil, fmt.Errorf("list protected branches page %d: %w", page, err)
+		}
+		var raws []gitlabProtectedBranchRaw
+		if err := decodeJSON(resp, &raws); err != nil {
+			return nil, fmt.Errorf("decode protected branches page %d: %w", page, err)
+		}
+		for _, raw := range raws {
+			if raw.Name == branch {
+				// Already covered by the exact-name lookup; if it 404'd,
+				// a stale/mismatched listing shouldn't override that.
+				continue
+			}
+			if gitlabWildcardMatchesBranch(raw.Name, branch) {
+				return raw.toRule(), nil
+			}
+		}
+		if len(raws) < perPage {
+			return nil, nil
+		}
+	}
+	return nil, fmt.Errorf("list protected branches: pagination exceeded %d pages", maxPages)
+}
+
+// gitlabWildcardMatchesBranch reports whether branch matches a GitLab
+// wildcard protected-branch pattern. GitLab's wildcard syntax treats "*"
+// as matching any run of characters (including "/"); patterns without a
+// "*" are exact-name rules and are handled by the exact-name lookup, not
+// here.
+func gitlabWildcardMatchesBranch(pattern, branch string) bool {
+	if !strings.Contains(pattern, "*") {
+		return false
+	}
+	quoted := regexp.QuoteMeta(pattern)
+	quoted = strings.ReplaceAll(quoted, `\*`, `.*`)
+	re, err := regexp.Compile("^" + quoted + "$")
+	if err != nil {
+		return false
+	}
+	return re.MatchString(branch)
 }
 
 // GrantProtectedBranchMergeUser adds userID to allowed_to_merge on a
@@ -1106,8 +1186,11 @@ func (c *LiveClient) GrantProtectedBranchMergeUser(ctx context.Context, owner, r
 	if userHasProtectedBranchAccess(rule, userID) {
 		return nil
 	}
+	// PATCH against the rule's actual name, which may be a wildcard
+	// pattern (e.g. "main*") rather than the literal branch name when the
+	// branch is only protected via a wildcard rule.
 	path := fmt.Sprintf("/projects/%s/protected_branches/%s",
-		projectPath(owner, repo), url.PathEscape(branch))
+		projectPath(owner, repo), url.PathEscape(rule.Name))
 	body := map[string]any{
 		"allowed_to_merge": []map[string]any{{"user_id": userID}},
 	}

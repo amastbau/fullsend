@@ -1804,6 +1804,10 @@ func TestIsProtectedBranch_False(t *testing.T) {
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/feature", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
+	})
 
 	protected, err := client.IsProtectedBranch(ctx, "myorg", "myrepo", "feature")
 	require.NoError(t, err)
@@ -1860,13 +1864,82 @@ func TestGetProtectedBranch_NotProtected(t *testing.T) {
 	client, mux := setupTest(t)
 	ctx := context.Background()
 
+	exactHandlerCalled := false
+	listHandlerCalled := false
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/dev", func(w http.ResponseWriter, r *http.Request) {
+		exactHandlerCalled = true
 		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		listHandlerCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
 	})
 
 	rule, err := client.GetProtectedBranch(ctx, "myorg", "myrepo", "dev")
 	require.NoError(t, err)
 	assert.Nil(t, rule)
+	assert.True(t, exactHandlerCalled, "handler was not called — URL path mismatch")
+	assert.True(t, listHandlerCalled, "handler was not called — URL path mismatch")
+}
+
+func TestGetProtectedBranch_WildcardMatch(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	exactHandlerCalled := false
+	listHandlerCalled := false
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		exactHandlerCalled = true
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		listHandlerCalled = true
+		writeJSON(t, w, http.StatusOK, []map[string]any{
+			{
+				"name": "main*",
+				"merge_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+				"push_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+			},
+		})
+	})
+
+	rule, err := client.GetProtectedBranch(ctx, "myorg", "myrepo", "main")
+	require.NoError(t, err)
+	require.NotNil(t, rule, "a Maintainer-only wildcard rule matching the default branch must be reported as protected")
+	assert.Equal(t, "main*", rule.Name)
+	require.Len(t, rule.MergeAccessLevels, 1)
+	assert.Equal(t, 40, rule.MergeAccessLevels[0].AccessLevel)
+	assert.True(t, exactHandlerCalled, "handler was not called — URL path mismatch")
+	assert.True(t, listHandlerCalled, "handler was not called — URL path mismatch")
+}
+
+func TestGetProtectedBranch_WildcardStarMatch(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, []map[string]any{
+			{
+				"name": "*",
+				"merge_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+			},
+		})
+	})
+
+	rule, err := client.GetProtectedBranch(ctx, "myorg", "myrepo", "main")
+	require.NoError(t, err)
+	require.NotNil(t, rule, "a bare '*' wildcard rule must be reported as protecting the default branch")
+	assert.Equal(t, "*", rule.Name)
 }
 
 func TestGetProtectedBranch_UnexpectedStatus(t *testing.T) {
@@ -1973,13 +2046,67 @@ func TestGrantProtectedBranchMergeUser_NotProtected(t *testing.T) {
 	client, mux := setupTest(t)
 	ctx := context.Background()
 
+	exactHandlerCalled := false
+	listHandlerCalled := false
 	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		exactHandlerCalled = true
 		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		listHandlerCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[]`))
 	})
 
 	err := client.GrantProtectedBranchMergeUser(ctx, "myorg", "myrepo", "main", 99)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "is not protected")
+	assert.True(t, exactHandlerCalled, "handler was not called — URL path mismatch")
+	assert.True(t, listHandlerCalled, "handler was not called — URL path mismatch")
+}
+
+// TestGrantProtectedBranchMergeUser_WildcardMatch covers a project whose
+// default branch is protected only through a wildcard rule (e.g. a
+// "main*" or "*" Maintainer-only rule) rather than an exact-name record.
+// The PATCH must target the matched rule's actual name, not the literal
+// branch name — patching "/protected_branches/main" would 404 again.
+func TestGrantProtectedBranchMergeUser_WildcardMatch(t *testing.T) {
+	client, mux := setupTest(t)
+	ctx := context.Background()
+	patched := false
+
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, []map[string]any{
+			{
+				"name": "main*",
+				"merge_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+				"push_access_levels": []map[string]any{
+					{"access_level": 40},
+				},
+			},
+		})
+	})
+	mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/protected_branches/main%2A", func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPatch, r.Method)
+		patched = true
+		var body map[string]any
+		readJSONBody(t, r, &body)
+		allowed, ok := body["allowed_to_merge"].([]any)
+		require.True(t, ok)
+		require.Len(t, allowed, 1)
+		entry := allowed[0].(map[string]any)
+		assert.Equal(t, float64(99), entry["user_id"])
+		writeJSON(t, w, http.StatusOK, map[string]any{"name": "main*"})
+	})
+
+	err := client.GrantProtectedBranchMergeUser(ctx, "myorg", "myrepo", "main", 99)
+	require.NoError(t, err)
+	assert.True(t, patched, "PATCH must target the matched wildcard rule's name, not the literal branch name")
 }
 
 func TestGrantProtectedBranchMergeUser_InvalidUser(t *testing.T) {

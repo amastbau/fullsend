@@ -1301,6 +1301,33 @@ func TestAnnotateGitLabRoleLifecycleDoesNotDoubleCountDrifted(t *testing.T) {
 	})
 }
 
+func TestAnnotateGitLabRoleLifecycleSkipsNonGitLabForgeRepos(t *testing.T) {
+	ctx := context.Background()
+	var calledPaths []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		calledPaths = append(calledPaths, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	glClient, err := gitlab.New("test-token", gitlab.WithBaseURL(srv.URL))
+	require.NoError(t, err)
+
+	// A mixed-forge manifest: "acme/app" is resolved as a GitHub repo, but
+	// happens to share an owner/repo path with an actual GitLab project.
+	// Only the GitLab-forge entry should ever reach the GitLab client.
+	result := &repos.StatusResult{
+		Repos: []repos.RepoStatus{
+			{Owner: "acme", Repo: "app", Forge: repos.ForgeGitHub},
+		},
+	}
+	annotateGitLabRoleLifecycle(ctx, newSingleClientFactory(glClient), result)
+	assert.Empty(t, calledPaths, "GitHub-forge repo must never be sent to the GitLab client, got requests: %v", calledPaths)
+	assert.Empty(t, result.Repos[0].Drifts)
+	assert.Equal(t, 0, result.Summary.Drifted)
+}
+
 func TestGitLabUninstallTokens(t *testing.T) {
 	manifest := &repos.Manifest{
 		Version: 1,
