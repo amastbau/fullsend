@@ -971,7 +971,12 @@ func convergeRepo(ctx context.Context,
 	// 2e: Commit all scaffold file changes in one atomic commit.
 	// Variable/secret writes above are not rolled back on commit failure;
 	// the next Converge run self-heals (writes become no-ops, commit retries).
+	// Collapse duplicate paths here so a future phase cannot re-queue a
+	// path already produced by ref-upgrade, root-CI migration, repair,
+	// content drift, or preset application. GitLab rejects two create
+	// actions for the same path in one commit (#7645, #7651).
 	if len(allScaffoldFiles) > 0 && !cfg.DryRun {
+		allScaffoldFiles = uniqueScaffoldFiles(allScaffoldFiles)
 		if err := commitScaffold(ctx, rr.Owner, rr.Repo, allScaffoldFiles, cfg.Direct, true); err != nil {
 			cr.Actions = append(cr.Actions, ComponentAction{
 				Component: "scaffold",
@@ -1000,6 +1005,27 @@ func convergeRepo(ctx context.Context,
 	}
 
 	return cr
+}
+
+// uniqueScaffoldFiles collapses files so each path appears at most once.
+// The first entry wins, matching GitLab's commit builder (first actionable
+// entry) and protecting both forges from a duplicate-path commit batch.
+// Later converge phases that re-queue a path already produced by an
+// earlier phase are dropped rather than submitted as a second action.
+func uniqueScaffoldFiles(files []forge.TreeFile) []forge.TreeFile {
+	if len(files) < 2 {
+		return files
+	}
+	seen := make(map[string]struct{}, len(files))
+	out := make([]forge.TreeFile, 0, len(files))
+	for _, f := range files {
+		if _, dup := seen[f.Path]; dup {
+			continue
+		}
+		seen[f.Path] = struct{}{}
+		out = append(out, f)
+	}
+	return out
 }
 
 func gitlabRoleCredentialPresent(components []ComponentStatus) bool {

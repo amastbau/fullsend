@@ -1276,6 +1276,49 @@ func TestCommitFiles_DuplicateCreatePaths(t *testing.T) {
 	assert.True(t, committed)
 }
 
+func TestCommitFiles_DeleteThenCreateSamePath(t *testing.T) {
+	client, mux := setupTest(t)
+
+	existing := []byte("old")
+	existingSHA := blobSHA(existing)
+
+	mux.HandleFunc("/api/v4/projects/owner%2Frepo", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": 1, "name": "repo", "path_with_namespace": "owner/repo",
+			"default_branch": "main", "visibility": "public",
+		})
+	})
+
+	mux.HandleFunc("/api/v4/projects/owner%2Frepo/repository/tree", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]any{
+			{"id": existingSHA, "path": "conflict.txt", "type": "blob", "mode": "100644"},
+		})
+	})
+
+	mux.HandleFunc("/api/v4/projects/owner%2Frepo/repository/commits", func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+
+		actions := body["actions"].([]any)
+		require.Len(t, actions, 1, "delete then create of the same path must collapse to one action")
+
+		action := actions[0].(map[string]any)
+		assert.Equal(t, "delete", action["action"], "first actionable entry (delete) must win")
+		assert.Equal(t, "conflict.txt", action["file_path"])
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": "commit-sha-del-create"})
+	})
+
+	committed, err := client.CommitFiles(context.Background(), "owner", "repo", "replace file", []forge.TreeFile{
+		{Path: "conflict.txt", Delete: true},
+		{Path: "conflict.txt", Content: []byte("new"), Mode: "100644"},
+	})
+	require.NoError(t, err)
+	assert.True(t, committed)
+}
+
 func TestCommitFiles_Idempotent(t *testing.T) {
 	client, mux := setupTest(t)
 
