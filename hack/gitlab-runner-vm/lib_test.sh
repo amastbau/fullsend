@@ -629,7 +629,7 @@ GATEWAY="${SCRIPT_DIR}/executor/gateway.sh"
 if grep -Fq 'ensure_user_systemd_env' "${GATEWAY}" \
   && grep -Fq 'user_systemctl' "${GATEWAY}" \
   && grep -Fq 'user_systemctl' "${SETUP}" \
-  && grep -Fq 'Environment=XDG_RUNTIME_DIR=/run/user/%U' "${SETUP}" \
+  && grep -Fq 'Environment=XDG_RUNTIME_DIR=/run/user/${runner_uid}' "${SETUP}" \
   && grep -Fq 'executor/gateway.sh' "${CREATE_GCP}" \
   && grep -Fq 'executor/gateway.sh' "${CREATE_OCP}" \
   && grep -Fq 'setup.sh' "${CREATE_GCP}" \

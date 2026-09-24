@@ -73,6 +73,8 @@ BUILDS_DIR="${HOME}/builds"
 CACHE_DIR="${HOME}/cache"
 CONFIG_TOML="/etc/gitlab-runner/config.toml"
 RUNNER_USER="${USER:-$(whoami)}"
+# Overridable so setup_test.sh can point the drop-in at a temp dir.
+GITLAB_RUNNER_OVERRIDE_DIR="/etc/systemd/system/gitlab-runner.service.d"
 
 # Source the central gitlab-runner version pin.
 _runner_version_sh="${SCRIPT_DIR}/gitlab-runner-version.sh"
@@ -307,21 +309,31 @@ register_runner() {
 setup_runner_user() {
   info "Configuring gitlab-runner to run as ${RUNNER_USER}"
 
-  local override_dir="/etc/systemd/system/gitlab-runner.service.d"
+  local override_dir="${GITLAB_RUNNER_OVERRIDE_DIR}"
   local override_file="${override_dir}/user.conf"
+  local runner_uid
 
   # GitLab Runner is a system service, so it does not go through pam_systemd
   # and does not inherit a user-session bus. Linger keeps user@UID.service
   # alive; these Environment= lines let systemctl --user and rootless podman
-  # talk to it. %U is the UID of User= (systemd specifier).
+  # talk to it.
   #
-  # The skip path must also require the env lines: a VM provisioned before
-  # this fix has User= already, and re-running setup.sh has to rewrite the
-  # drop-in so existing runners converge without manual repair.
+  # Resolve the numeric UID at generation time. systemd %U/%u specifiers
+  # expand to the *manager instance* (root / 0 for a system-scope unit),
+  # not to User= — interpolating %U produced /run/user/0 and broke
+  # rootless Podman (#7696).
+  #
+  # The skip path must require the env lines with this UID: a VM
+  # provisioned before #7453 has User= already, and a VM provisioned with
+  # the #7453 %U drop-in still expands to UID 0. Re-running setup.sh has
+  # to rewrite the drop-in so existing runners converge without manual
+  # repair.
+  runner_uid="$(id -u "${RUNNER_USER}")" || fail "cannot resolve UID for ${RUNNER_USER}"
+
   if [ -f "${override_file}" ] \
     && grep -q "User=${RUNNER_USER}" "${override_file}" \
-    && grep -q 'XDG_RUNTIME_DIR=/run/user/%U' "${override_file}" \
-    && grep -q 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus' "${override_file}"; then
+    && grep -Fq "XDG_RUNTIME_DIR=/run/user/${runner_uid}" "${override_file}" \
+    && grep -Fq "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${runner_uid}/bus" "${override_file}"; then
     ok "systemd override already in place"
     return
   fi
@@ -332,8 +344,8 @@ setup_runner_user() {
 User=${RUNNER_USER}
 Group=${RUNNER_USER}
 WorkingDirectory=${HOME}
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
+Environment=XDG_RUNTIME_DIR=/run/user/${runner_uid}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${runner_uid}/bus
 ExecStart=
 ExecStart=/usr/local/bin/gitlab-runner run --config ${CONFIG_TOML} --working-directory ${HOME} --service gitlab-runner
 EOF

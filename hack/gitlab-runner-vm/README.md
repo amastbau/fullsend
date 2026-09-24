@@ -11,10 +11,12 @@ Each runner VM runs:
   The runner is a systemd *system* service running as the VM user, so it
   does not go through `pam_systemd` and does not inherit a login session.
   `setup.sh` enables lingering for that user and writes `XDG_RUNTIME_DIR`
-  / `DBUS_SESSION_BUS_ADDRESS` into the gitlab-runner drop-in so
-  `systemctl --user` (OpenShell gateway start/stop) can reach the user
-  bus. `executor/gateway.sh` also pins those variables itself, so a job
-  still works if the unit environment is missing (#7453).
+  / `DBUS_SESSION_BUS_ADDRESS` into the gitlab-runner drop-in with the
+  runner user's numeric UID (resolved at setup time — systemd `%U` on a
+  system-scope unit expands to 0, not `User=`). `systemctl --user`
+  (OpenShell gateway start/stop) can then reach the user bus.
+  `executor/gateway.sh` also pins those variables itself, so a job still
+  works if the unit environment is missing (#7453, #7696).
 - **Podman** (rootless) — creates per-job containers. A user systemd
   timer (`fullsend-podman-prune.timer`) plus a prepare/cleanup hook
   reclaim unused images and stopped leftovers so the ~30 GiB root disk
