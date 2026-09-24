@@ -257,6 +257,12 @@ Glob patterns are supported:
 fullsend repos install "acme/*" --direct --concurrency 8
 ```
 
+A filtered install requires credentials only for the selected
+repositories' forges. With both GitHub and GitLab entries in the
+manifest, `fullsend repos install gallen/integration-service` needs
+`GITLAB_TOKEN` but not `GH_TOKEN`. Installing the whole manifest still
+requires credentials for every forge that has repos.
+
 Install a subset of agent roles (defaults to
 `triage,coder,review,fix,retro,prioritize`):
 

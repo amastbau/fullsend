@@ -347,7 +347,7 @@ func Converge(ctx context.Context, cfg ConvergeConfig,
 		return nil, fmt.Errorf("invalid manifest: %w", err)
 	}
 
-	repos, err := manifest.ExpandGlobs(ctx, clients)
+	repos, err := manifest.ExpandGlobsFor(ctx, clients, cfg.RepoFilter)
 	if err != nil {
 		return nil, fmt.Errorf("expanding globs: %w", err)
 	}
