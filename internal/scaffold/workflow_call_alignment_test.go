@@ -454,6 +454,40 @@ func TestSetupGCPAllowsOpenAIOnlyRuns(t *testing.T) {
 	}
 }
 
+func TestReusableDispatchAcceptsAndForwardsOpenAISecretForTriage(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "reusable-dispatch.yml"))
+	require.NoError(t, err)
+
+	var workflow struct {
+		On struct {
+			WorkflowCall struct {
+				Secrets map[string]workflowSecret `yaml:"secrets"`
+			} `yaml:"workflow_call"`
+		} `yaml:"on"`
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &workflow))
+
+	for _, name := range []string{"FULLSEND_GCP_WIF_PROVIDER", "FULLSEND_GCP_PROJECT_ID", "FULLSEND_OPENAI_API_KEY"} {
+		secret, ok := workflow.On.WorkflowCall.Secrets[name]
+		require.True(t, ok, "reusable dispatch must declare %s", name)
+		assert.False(t, secret.Required, "%s must be optional for an OpenAI-only repository", name)
+	}
+
+	for _, step := range workflow.Jobs["triage"].Steps {
+		if step.Name == "Run triage agent" {
+			assert.Equal(t, "${{ secrets.FULLSEND_OPENAI_API_KEY }}", step.Env["OPENAI_API_KEY"])
+			return
+		}
+	}
+	t.Fatal("triage agent step not found")
+}
+
 // TestReusableDispatchFixInstructionNormalizesCRLF validates that CRLF line endings
 // in a comment body are stripped before the fix instruction is written to GITHUB_OUTPUT.
 func TestReusableDispatchFixInstructionNormalizesCRLF(t *testing.T) {

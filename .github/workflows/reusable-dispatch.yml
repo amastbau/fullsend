@@ -81,7 +81,9 @@ on:
       FULLSEND_GCP_WIF_PROVIDER:
         required: false
       FULLSEND_GCP_PROJECT_ID:
-        required: true
+        required: false
+      FULLSEND_OPENAI_API_KEY:
+        required: false
       OTEL_EXPORTER_OTLP_TRACES_HEADERS:
         description: >-
           OTLP headers for ADR 0050 Level 2 trace export, forwarded to all
@@ -680,6 +682,7 @@ jobs:
           FULLSEND_OPENAI_AUDIENCE: ${{ vars.FULLSEND_OPENAI_AUDIENCE }}
           FULLSEND_OPENAI_IDENTITY_PROVIDER_ID: ${{ vars.FULLSEND_OPENAI_IDENTITY_PROVIDER_ID }}
           FULLSEND_OPENAI_SERVICE_ACCOUNT_ID: ${{ vars.FULLSEND_OPENAI_SERVICE_ACCOUNT_ID }}
+          OPENAI_API_KEY: ${{ secrets.FULLSEND_OPENAI_API_KEY }}
         with:
           agent: triage
           fullsend-dir: ${{ inputs.install_mode == 'per-repo' && '.fullsend' || '' }}
