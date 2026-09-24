@@ -8,7 +8,10 @@ role, no change to fullsend.
 Typical follow-ups: re-run CI jobs an agent classified as flaky, open a
 deployment, notify a channel, or feed the result into another workflow.
 
-Decided in [ADR 0115](../../ADRs/0115-user-owned-follow-up-workflows-after-agent-runs.md).
+This is one option, not a requirement: how you automate your own repository
+is up to you. It is the option that works today for actions no built-in role
+grants, because fullsend keeps control-plane write access out of agent roles
+([ADR 0115](../../ADRs/0115-criteria-for-adding-a-built-in-agent-role.md)).
 
 ## Prerequisites
 
@@ -27,24 +30,10 @@ Decided in [ADR 0115](../../ADRs/0115-user-owned-follow-up-workflows-after-agent
 | Re-run or cancel CI jobs, dispatch a workflow, approve a run, deploy | a follow-up workflow | the job token, with permissions you declare |
 | Keep the LLM sandbox weaker than your scripts | the harness `privilege_levels` field (`runtime: read`) | the same role's token at a lower level |
 
-The rule: anything a fullsend role does not already grant is a follow-up
-workflow, not a wider role. Roles are shared trust boundaries; your workflow's
-permissions are yours alone. `privilege_levels` only narrows a token within
-the role, so it complements a follow-up workflow rather than replacing it. See
+For a permission no built-in role grants, a follow-up workflow is the
+simplest place: its permissions are declared in a file you own. `privilege_levels` only narrows a
+token within a role, so it does not replace a follow-up workflow. See
 [`privilege_levels` in the harness reference](../../reference/harness-reference.md).
-
-Why not a stage level that carries the extra scope instead? Three reasons:
-
-- Extra levels exist only on custom roles served by a standalone mint. You
-  can define one for your own mint, but every adopting repository must use a
-  mint that serves it; hosted-mint users cannot. A level the mint does not
-  serve is a 403 at run time, after the agent has run.
-- One stage, one token. A post-script that comments and re-runs needs both
-  scopes in that token, so nothing is separated.
-- The scope lands on the App, so every adopting repository needs the App
-  installed, and any harness naming the role can request the level.
-
-The follow-up workflow keeps each permission in a file you own and can read.
 
 ## What a run publishes
 
@@ -67,9 +56,13 @@ fullsend-<agent>/
     └── eval-measure-ledger.txt
 ```
 
-On a successful run the highest-numbered `iteration-N/output/` holds the
-result that passed validation. A run whose output never validates fails, so
-filtering on `workflow_run.conclusion == 'success'` is enough to skip it.
+A run whose output never validates fails, so filter on
+`workflow_run.conclusion == 'success'` first. On a successful run, the
+validated result is usually in the highest-numbered `iteration-N/output/`.
+It is not always there. When no iteration passes inline, a final sweep can
+accept an earlier iteration and leave a later, invalid one in the artifact.
+Walk the iterations from newest to oldest and use the first result that
+matches your schema, as Step 3 does.
 
 The shim workflow completing raises a `workflow_run` event in your repository.
 That event is your trigger.
@@ -85,7 +78,7 @@ That event is your trigger.
 ### 1. Make the result carry what the follow-up needs
 
 The follow-up sees only the result file. Put identifiers in it, not prose:
-job ids, run ids, a verdict enum. Keep confidence scores if the follow-up
+Actions job ids, run ids, a verdict enum. Keep confidence scores if the follow-up
 thresholds on them. Example result for a CI diagnosis agent:
 
 ```json
@@ -93,7 +86,7 @@ thresholds on them. Example result for a CI diagnosis agent:
   "status": "diagnosed",
   "recommended_action": "retry",
   "retry_targets": [
-    { "check_name": "flaky-unit", "check_run_id": 105264044037 }
+    { "job_name": "flaky-unit", "job_id": 105264044037 }
   ]
 }
 ```
@@ -149,12 +142,23 @@ jobs:
           set -euo pipefail
           for art in result/fullsend-*; do
             echo "### agent: ${art#result/fullsend-}"
-            m=$(ls "$art"/*/metrics.json 2>/dev/null | head -1)
-            [ -n "$m" ] && jq -r '"model=\(.model) runtime=\(.runtime) iterations=\(.iterations) turns=\(.num_turns) cost_usd=\(.total_cost_usd)"' "$m"
-            r=$(ls "$art"/*/iteration-*/output/*.json 2>/dev/null | sort -V | tail -1)
-            [ -n "$r" ] && jq '{action, pr_number, head_sha, findings: (.findings|length?)}' "$r"
+            for m in "$art"/*/metrics.json; do
+              if [ -f "$m" ]; then
+                jq -r '"model=\(.model) runtime=\(.runtime) iterations=\(.iterations) turns=\(.num_turns) cost_usd=\(.total_cost_usd)"' "$m"
+              fi
+            done
+            last=$(printf '%s\n' "$art"/*/iteration-*/output | sort -V | tail -1)
+            for r in "$last"/*.json; do
+              if [ -f "$r" ]; then
+                jq '{action, pr_number, head_sha, findings: (.findings|length?)}' "$r"
+              fi
+            done
           done | tee -a "$GITHUB_STEP_SUMMARY"
 ```
+
+The summary prints the newest iteration's output as-is. It is for reading,
+not for acting on; Step 3 shows how to select a validated result. A run
+without `metrics.json` or without a result file prints only the agent line.
 
 Output from a run of the default review agent:
 
@@ -210,6 +214,7 @@ jobs:
       actions: write                 # read the run, download, re-run
     env:
       AGENT: ci-retry                # only this agent's runs matter here
+      CI_WORKFLOW: ci                # only this workflow's jobs may be re-run
     steps:
       - name: Check this run is a ${{ env.AGENT }} run
         id: find
@@ -217,8 +222,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
-          name=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
-            --jq '.artifacts[].name' | grep -Fx "fullsend-$AGENT" || true)
+          names=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].name')
+          name=$(grep -Fx "fullsend-$AGENT" <<<"$names" || true)
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           echo "${name:-no $AGENT result on run $RUN_ID; nothing to do}"
 
@@ -235,13 +240,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          f=$(ls result/*/iteration-*/output/ci-retry-result.json 2>/dev/null | sort -V | tail -1) || exit 0
+          f=""
+          for d in $(printf '%s\n' result/*/iteration-*/output | sort -Vr); do   # newest first
+            if jq -e '(.recommended_action | type == "string") and (.retry_targets | type == "array")' \
+                 "$d/ci-retry-result.json" >/dev/null 2>&1; then
+              f="$d/ci-retry-result.json"; break
+            fi
+          done
+          [ -n "$f" ] || { echo "no result matches the schema; nothing to do"; exit 0; }
+          echo "using $f"
           [ "$(jq -r .recommended_action "$f")" = retry ] || exit 0
-          for id in $(jq -r '.retry_targets[].check_run_id' "$f"); do
-            job=$(gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id")
-            [ "$(jq -r .conclusion <<<"$job")" = failure ] || continue     # confirm against the API
+          for id in $(jq -r '.retry_targets[].job_id | numbers' "$f"); do
+            job=$(gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$id") || continue        # confirm against the API
+            [ "$(jq -r .conclusion <<<"$job")" = failure ] || continue
+            [ "$(jq -r .workflow_name <<<"$job")" = "$CI_WORKFLOW" ] || continue
             run=$(jq -r .run_id <<<"$job")
-            [ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .run_attempt)" -le 2 ] || continue  # budget
+            attempt=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .run_attempt) || continue
+            [ "$attempt" -le 2 ] || continue                                             # budget
             gh run rerun "$run" --job "$id" --repo "$GITHUB_REPOSITORY"
           done
 ```
@@ -252,9 +267,13 @@ What each guard does:
   never validated fails.
 - **The gate step** checks the run's artifact list for `fullsend-<agent>`
   before anything is downloaded; other agents' runs and routing-only runs stop
-  there.
-- **The API lookup** confirms each id is a failed job in this repository. The
-  agent's list only selects among facts the API confirms.
+  there. An API error fails the step instead of reading as "nothing to do".
+- **The iteration walk** uses the newest result that matches the schema, so
+  an invalid later iteration is skipped.
+- **`numbers`** drops any id that is not a number before it reaches a URL.
+- **The API lookup** confirms each id is a failed job in this repository, in
+  the workflow named by `CI_WORKFLOW`. The agent can only choose among failed
+  jobs of that one workflow, never another workflow's runs.
 - **`run_attempt`** bounds repeats without any bookkeeping of your own.
 - **`--repo`** is required: the job has no checkout, so `gh` cannot infer the
   repository.
@@ -271,27 +290,32 @@ Trigger the agent and follow the chain. Output below is from a probe
 repository where `ci` fails on its first attempt:
 
 ```bash
-gh run list --limit 3 --json name,event,conclusion,databaseId \
-  --jq '.[] | "\(.name) [\(.event)] \(.conclusion // "running") id=\(.databaseId)"'
+gh run list --limit 12 --json name,event,conclusion,databaseId \
+  --jq '.[] | select(.conclusion != "skipped") | "\(.name) [\(.event)] \(.conclusion // "running") id=\(.databaseId)"' | head -4
 ```
 
 ```text
-ci-rerun [workflow_run] success id=35241406132
-fullsend [workflow_run] success id=35241374378
-ci [push] failure id=35241360345
+fullsend-run-info [workflow_run] success id=36049484065
+ci-rerun [workflow_run] success id=36049483995
+fullsend [workflow_run] success id=36049466518
+ci [push] success id=36049447970
 ```
 
 Then confirm the re-run happened and who triggered it:
 
 ```bash
-gh api repos/OWNER/REPO/actions/runs/35241360345 --jq '"attempt=\(.run_attempt) conclusion=\(.conclusion)"'
-gh api repos/OWNER/REPO/actions/runs/35241360345/attempts/2 --jq .triggering_actor.login
+gh api repos/OWNER/REPO/actions/runs/36049447970 --jq '"attempt=\(.run_attempt) conclusion=\(.conclusion)"'
+gh api repos/OWNER/REPO/actions/runs/36049447970/attempts/2 --jq .triggering_actor.login
 ```
 
 ```text
 attempt=2 conclusion=success
 github-actions[bot]
 ```
+
+`ci` shows `success` because the list reports the latest attempt. The
+follow-up log shows `using result/fs-cir-probe/iteration-1/output/ci-retry-result.json`:
+the probe's iteration-2 held an invalid result and was skipped.
 
 The re-run attempt is attributed to `github-actions[bot]` and to the follow-up
 run, not to the agent's App. Comments the agent posted still carry the App
@@ -323,11 +347,14 @@ on:
       run-id:
         required: true
         type: string
+permissions: {}
 jobs:
   rerun:
     runs-on: ubuntu-24.04
+    permissions:
+      actions: write
     steps:
-      # the download and re-run steps from Step 2, using inputs.run-id
+      # the gate, download and re-run steps from Step 3, using inputs.run-id
 ```
 
 ```yaml
@@ -336,6 +363,7 @@ on:
   workflow_run:
     workflows: ["fullsend"]
     types: [completed]
+permissions: {}
 jobs:
   rerun:
     if: github.event.workflow_run.conclusion == 'success'
@@ -362,7 +390,7 @@ restricts which actions may run, the agent repository must be on the allowlist.
 
 ## See also
 
-- [ADR 0115](../../ADRs/0115-user-owned-follow-up-workflows-after-agent-runs.md) — the decision and its rationale
+- [ADR 0115](../../ADRs/0115-criteria-for-adding-a-built-in-agent-role.md) — the criteria for adding a built-in agent role
 - [Bring Your Own Agent](bring-your-own-agent.md) — building the agent whose result you consume
 - [Custom Agent Identity](custom-agent-identity.md) — when a role change is and is not needed
 - [GitHub Docs: `workflow_run`](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run)
