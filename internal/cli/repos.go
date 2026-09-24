@@ -825,7 +825,10 @@ func runReposInstall(ctx context.Context, opts *reposInstallConfig) error {
 		}
 	}
 
-	targetedForges := manifest.DistinctForgesFor(opts.repoFilter)
+	targetedForges, err := manifest.DistinctForgesFor(opts.repoFilter)
+	if err != nil {
+		return fmt.Errorf("determining targeted forges: %w", err)
+	}
 	if err := checkAllForgeScopes(ctx, clients, printer, targetedForges); err != nil {
 		return err
 	}
@@ -1421,7 +1424,11 @@ func runReposUninstall(ctx context.Context, opts *reposUninstallConfig, repoArgs
 	var succeededRepos []string
 	var teardownFailed int
 	if !opts.manifestOnly {
-		if err := checkAllForgeScopes(ctx, clients, printer, manifest.DistinctForgesFor(concreteRepos)); err != nil {
+		targetedForges, err := manifest.DistinctForgesFor(concreteRepos)
+		if err != nil {
+			return fmt.Errorf("determining targeted forges: %w", err)
+		}
+		if err := checkAllForgeScopes(ctx, clients, printer, targetedForges); err != nil {
 			return err
 		}
 

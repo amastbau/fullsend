@@ -551,6 +551,63 @@ github:
 	}
 }
 
+func TestExpandGlobsFor_SkipsUnselectedPlatform(t *testing.T) {
+	// GitHub has only a glob entry; GitLab has the concrete repo actually
+	// targeted by the filter. A GitLab-only install must not need to
+	// expand (and therefore must not need credentials for) the GitHub
+	// glob entry.
+	input := `
+version: 1
+github:
+  mint_url: https://mint.example.com
+  repos:
+    - name: acme/*
+gitlab:
+  url: https://gitlab.example.com
+  repos:
+    - name: group/project
+`
+	var m Manifest
+	require.NoError(t, yaml.Unmarshal([]byte(input), &m))
+
+	gl := forge.NewFakeClient()
+	gl.Repos = []forge.Repository{{Name: "project", FullName: "group/project"}}
+
+	factory := &perForgeClientFactory{
+		clients: map[string]forge.Client{ForgeGitLab: gl},
+		errs:    map[string]error{ForgeGitHub: assert.AnError},
+	}
+
+	ctx := context.Background()
+	resolved, err := m.ExpandGlobsFor(ctx, factory, []string{"group/project"})
+	require.NoError(t, err, "expanding the GitHub glob entry must be skipped when the filter only selects GitLab repos")
+	require.Len(t, resolved, 1)
+	assert.Equal(t, "group", resolved[0].Owner)
+	assert.Equal(t, "project", resolved[0].Repo)
+	assert.Equal(t, ForgeGitLab, resolved[0].Forge)
+}
+
+func TestExpandGlobsFor_EmptyFilterExpandsEveryPlatform(t *testing.T) {
+	input := `
+version: 1
+github:
+  mint_url: https://mint.example.com
+  repos:
+    - name: acme/*
+`
+	var m Manifest
+	require.NoError(t, yaml.Unmarshal([]byte(input), &m))
+
+	fc := forge.NewFakeClient()
+	fc.Repos = []forge.Repository{{Name: "api", FullName: "acme/api"}}
+
+	ctx := context.Background()
+	resolved, err := m.ExpandGlobsFor(ctx, newTestClientFactory(fc), nil)
+	require.NoError(t, err)
+	require.Len(t, resolved, 1)
+	assert.Equal(t, "api", resolved[0].Repo)
+}
+
 func TestExpandGlobs_ListOrgReposError(t *testing.T) {
 	input := `
 version: 1
@@ -1144,28 +1201,43 @@ func TestDistinctForgesFor(t *testing.T) {
 	}
 
 	t.Run("empty filter returns both forges", func(t *testing.T) {
-		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, m.DistinctForgesFor(nil))
-		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, m.DistinctForgesFor([]string{}))
+		forges, err := m.DistinctForgesFor(nil)
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, forges)
+
+		forges, err = m.DistinctForgesFor([]string{})
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, forges)
 	})
 
 	t.Run("gitlab-only filter", func(t *testing.T) {
-		assert.Equal(t, []string{ForgeGitLab}, m.DistinctForgesFor([]string{"gallen/integration-service"}))
+		forges, err := m.DistinctForgesFor([]string{"gallen/integration-service"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitLab}, forges)
 	})
 
 	t.Run("github-only filter", func(t *testing.T) {
-		assert.Equal(t, []string{ForgeGitHub}, m.DistinctForgesFor([]string{"acme/api"}))
+		forges, err := m.DistinctForgesFor([]string{"acme/api"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitHub}, forges)
 	})
 
 	t.Run("filter spanning both forges", func(t *testing.T) {
-		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, m.DistinctForgesFor([]string{"acme/api", "gallen/integration-service"}))
+		forges, err := m.DistinctForgesFor([]string{"acme/api", "gallen/integration-service"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitHub, ForgeGitLab}, forges)
 	})
 
 	t.Run("glob filter matching only github", func(t *testing.T) {
-		assert.Equal(t, []string{ForgeGitHub}, m.DistinctForgesFor([]string{"acme/w*"}))
+		forges, err := m.DistinctForgesFor([]string{"acme/w*"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitHub}, forges)
 	})
 
 	t.Run("unmatched filter returns empty", func(t *testing.T) {
-		assert.Empty(t, m.DistinctForgesFor([]string{"missing/repo"}))
+		forges, err := m.DistinctForgesFor([]string{"missing/repo"})
+		require.NoError(t, err)
+		assert.Empty(t, forges)
 	})
 
 	t.Run("glob manifest entry selected by concrete filter", func(t *testing.T) {
@@ -1180,7 +1252,32 @@ func TestDistinctForgesFor(t *testing.T) {
 				Repos: []RepoEntry{{Name: "gallen/integration-service"}},
 			},
 		}
-		assert.Equal(t, []string{ForgeGitHub}, globManifest.DistinctForgesFor([]string{"acme/api"}))
+		forges, err := globManifest.DistinctForgesFor([]string{"acme/api"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitHub}, forges)
+	})
+
+	t.Run("glob manifest entry and glob filter that overlap after expansion", func(t *testing.T) {
+		// entry "acme/*" and filter "*/api" don't match as literal
+		// pattern strings in either direction, but both can resolve to
+		// "acme/api" once expanded against the real repo list.
+		// platformEntriesMatchFilter can't expand globs itself, so it
+		// must conservatively treat this as a match rather than silently
+		// dropping GitHub from the targeted forges.
+		globManifest := &Manifest{
+			Version: 1,
+			GitHub: &PlatformConfig{
+				MintURL: "https://mint.example.com",
+				Repos:   []RepoEntry{{Name: "acme/*"}},
+			},
+			GitLab: &PlatformConfig{
+				URL:   "https://gitlab.example.com",
+				Repos: []RepoEntry{{Name: "gallen/integration-service"}},
+			},
+		}
+		forges, err := globManifest.DistinctForgesFor([]string{"*/api"})
+		require.NoError(t, err)
+		assert.Equal(t, []string{ForgeGitHub}, forges)
 	})
 }
 

@@ -2739,6 +2739,58 @@ func TestRunReposInstall_GitLabFilterSucceedsWithoutGitHubCreds(t *testing.T) {
 	assert.True(t, factory.requested(repos.ForgeGitLab))
 }
 
+// globForgeManifestYAML pairs a GitHub glob entry with a concrete GitLab
+// entry. A GitLab-only filtered install must not expand the GitHub glob
+// (which lists org repos via the GitHub API), since that would require
+// GH_TOKEN even though no GitHub repo is targeted.
+const globForgeManifestYAML = `version: 1
+github:
+  mint_url: https://mint.example.com
+  fullsend_ref: v1.0.0
+  repos:
+    - name: acme/*
+gitlab:
+  url: https://gitlab.example.com
+  fullsend_ref: v1.0.0
+  repos:
+    - name: group/project
+`
+
+func TestRunReposInstall_GitLabFilterSkipsGitHubGlobExpansion(t *testing.T) {
+	manifestPath := writeTestManifest(t, globForgeManifestYAML)
+	factory := &filterForgeFactory{
+		clients: map[string]forge.Client{
+			repos.ForgeGitLab: newInstallFakeClient("group/project"),
+		},
+		errs: map[string]error{
+			repos.ForgeGitHub: errors.New("github client should not be requested"),
+		},
+	}
+
+	err := runReposInstall(context.Background(), &reposInstallConfig{
+		manifest:               manifestPath,
+		concurrency:            1,
+		repoFilter:             []string{"group/project"},
+		roles:                  []string{"triage"},
+		dryRun:                 true,
+		inferenceProject:       "inf-proj",
+		inferenceProjectNumber: "123456789",
+		inferenceRegion:        "us-central1",
+		testFactory:            factory,
+	})
+	// Without threading the repo filter into glob expansion, Converge
+	// would call ExpandGlobs unconditionally, which resolves the GitHub
+	// "acme/*" entry via clients.ConfigFor(ForgeGitHub) — hard-failing the
+	// whole install on the injected error even though no GitHub repo is
+	// targeted. (A separate, best-effort GitHub lookup for ref resolution
+	// also calls ConfigFor(GitHub) and tolerates its own error, so this
+	// test does not assert that GitHub is never requested at all — only
+	// that a GitHub credential failure must not block a GitLab-only
+	// install.)
+	require.NoError(t, err, "GitLab-only filter must not fail when the manifest's GitHub entry is a glob and GH_TOKEN is unavailable")
+	assert.True(t, factory.requested(repos.ForgeGitLab))
+}
+
 func TestRunReposInstall_GitHubFilterDoesNotRequestGitLab(t *testing.T) {
 	manifestPath := writeTestManifest(t, mixedForgeManifestYAML)
 	factory := &filterForgeFactory{
