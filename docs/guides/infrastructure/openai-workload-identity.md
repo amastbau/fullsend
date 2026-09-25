@@ -337,9 +337,14 @@ same harness can carry the provider for every runtime — a Vertex run notes tha
 provider was skipped and needs no OpenAI credential.
 
 A custom agent (a `source:` entry) declares it on its own harness; the built-in fleet agents gain
-it with the GPT pilot in the fullsend-ai/agents repository. `providers/openai.yaml` arrives with
-the other upstream defaults when a run prepares its workspace, and both it and the matching profile
-are built into fullsend — a local run needs nothing on disk, and you commit neither. The profile lets the sandbox reach `api.openai.com` for the Responses API and
+it with the GPT pilot in the fullsend-ai/agents repository. In this fork, built-in `triage` on
+`codex` is also adapted at run time: Fullsend removes its Vertex-only credential mounts, provider,
+and profile and supplies the OpenAI provider. Other built-in agents and custom harnesses are not
+adapted.
+
+`providers/openai.yaml` arrives with the other upstream defaults when a run prepares its workspace,
+and both it and the matching profile are built into fullsend — a local run needs nothing on disk,
+and you commit neither. The profile lets the sandbox reach `api.openai.com` for the Responses API and
 nothing else. Use a model id from OpenAI's catalog — on pi, `pi --list-models openai` in the sandbox image
 prints the ones it knows; `gpt-5.6-luna` is the inexpensive
 reasoning model and `gpt-5.6-sol` the capable one, and a model the mapping's project cannot use is
