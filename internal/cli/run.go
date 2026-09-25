@@ -890,6 +890,56 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 		setFlagEnv("ISSUE_NUMBER", fmt.Sprintf("%d", sOpts.statusNum))
 	}
 
+	// Select the runtime before validating host_files: the built-in triage
+	// harness currently carries Vertex credential mounts, but a Codex run
+	// needs the OpenAI provider instead. Keep this selection shared with the
+	// later model/effort overrides so the adaptation cannot disagree with
+	// the runtime actually launched.
+	overrides, err := resolveRunOverrides(oFlags, os.Getenv, "")
+	if err != nil {
+		printer.StepFail(err.Error())
+		return err
+	}
+	runCfg, runCfgErr := loadRunConfig(orgConfigPath)
+	if runCfgErr != nil {
+		if errors.Is(runCfgErr, errParsingConfigRuntime) {
+			printer.StepFail("Failed to parse config.yaml")
+		} else {
+			printer.StepFail("Failed to load config.yaml")
+		}
+		return runCfgErr
+	}
+	if overrides.runtime == "" {
+		if b, _, e := runCfg.backend(agentName); e == nil {
+			overrides, err = resolveRunOverrides(oFlags, os.Getenv, b.Runtime.Name())
+			if err != nil {
+				printer.StepFail(err.Error())
+				return err
+			}
+		}
+	}
+	runtimeBackend, runtimeConfigSource, runtimeErr := resolveBackendFrom(overrides, runCfg, agentName)
+	if runtimeErr != nil {
+		switch {
+		case errors.Is(runtimeErr, errParsingConfigRuntime):
+			printer.StepFail("Failed to parse config.yaml")
+		case errors.Is(runtimeErr, errResolvingRuntime):
+			printer.StepFail("Failed to resolve runtime")
+		default:
+			printer.StepFail("Failed to load config.yaml")
+		}
+		return runtimeErr
+	}
+	var configuredAgentSource string
+	if orgCfg != nil {
+		if entry := findConfigAgentEntry(orgCfg.AgentEntries(), agentName); entry != nil {
+			configuredAgentSource = entry.Source
+		}
+	}
+	if maybeAdaptBuiltinTriage(h, &result, runtimeBackend.Runtime.Name(), agentName, configuredAgentSource, fetchDeps) {
+		printer.StepInfo("Built-in triage: using OpenAI provider without Vertex credential mounts for Codex")
+	}
+
 	// Mint agent token when a mint URL and harness role are both available.
 	// Runs before env expansion so minted tokens flow into RunnerEnv and
 	// host_files via os.Getenv automatically.
@@ -1012,52 +1062,6 @@ func runAgent(ctx context.Context, agentName, fullsendDir, outputBase, targetRep
 	// NOTE: after this point h.RunnerEnv contains the merged effective set
 	// (runner_env + env.runner), not just the declared runner_env entries.
 	h.RunnerEnv = effectiveRunnerEnv
-
-	// Resolve the per-run overrides (flag > env) and the runtime early so
-	// both appear in the plan block. The full backend is used later (step
-	// 5b) for sandbox setup. Overrides are resolved once, here; runtimes
-	// never read FULLSEND_* themselves (#6526).
-	overrides, err := resolveRunOverrides(oFlags, os.Getenv, "")
-	if err != nil {
-		printer.StepFail(err.Error())
-		return err
-	}
-	// The config file is loaded once here and serves runtime selection, the
-	// runtime-scoped model gate and the agents: settings application below.
-	runCfg, runCfgErr := loadRunConfig(orgConfigPath)
-	if runCfgErr != nil {
-		if errors.Is(runCfgErr, errParsingConfigRuntime) {
-			printer.StepFail("Failed to parse config.yaml")
-		} else {
-			printer.StepFail("Failed to load config.yaml")
-		}
-		return runCfgErr
-	}
-	if overrides.runtime == "" {
-		// The runtime-scoped model aliases (FULLSEND_PI_MODEL,
-		// FULLSEND_CODEX_MODEL) depend on which runtime the config
-		// selects; resolve the config runtime first (including the
-		// agents: entry's runtime), then re-run.
-		if b, _, e := runCfg.backend(agentName); e == nil {
-			overrides, err = resolveRunOverrides(oFlags, os.Getenv, b.Runtime.Name())
-			if err != nil {
-				printer.StepFail(err.Error())
-				return err
-			}
-		}
-	}
-	runtimeBackend, runtimeConfigSource, runtimeErr := resolveBackendFrom(overrides, runCfg, agentName)
-	if runtimeErr != nil {
-		switch {
-		case errors.Is(runtimeErr, errParsingConfigRuntime):
-			printer.StepFail("Failed to parse config.yaml")
-		case errors.Is(runtimeErr, errResolvingRuntime):
-			printer.StepFail("Failed to resolve runtime")
-		default:
-			printer.StepFail("Failed to load config.yaml")
-		}
-		return runtimeErr
-	}
 
 	// Apply the agents: entry's model/effort for this agent to the composed
 	// harness: flag > env > agents: entry > harness. The same loaded config
