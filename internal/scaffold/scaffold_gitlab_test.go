@@ -997,3 +997,27 @@ func TestGitLabNoPerStageTemplates(t *testing.T) {
 		assert.Error(t, err, "per-stage template %s should not exist — use fullsend-agent.yml", path)
 	}
 }
+
+// TestGitLabAgentTemplateExportsGoogleCloudProject guards the Vertex ADC
+// contract for Pi's google-vertex (Gemini) provider. GitHub Actions gets
+// GOOGLE_CLOUD_PROJECT from google-github-actions/auth; the GitLab scaffold
+// does a manual WIF exchange and must export it itself. Claude-on-Vertex
+// still uses ANTHROPIC_VERTEX_PROJECT_ID; Pi only maps that onto
+// GOOGLE_CLOUD_PROJECT on the anthropic-vertex path (#7577).
+func TestGitLabAgentTemplateExportsGoogleCloudProject(t *testing.T) {
+	content, err := GitLabPerRepoFile(".gitlab/ci/fullsend-agent.yml")
+	require.NoError(t, err)
+	s := string(content)
+
+	assert.Contains(t, s, `export GOOGLE_CLOUD_PROJECT="${FULLSEND_GCP_PROJECT_ID}"`)
+	assert.Contains(t, s, `export ANTHROPIC_VERTEX_PROJECT_ID="${FULLSEND_GCP_PROJECT_ID}"`)
+	assert.Contains(t, s, `export GOOGLE_APPLICATION_CREDENTIALS="${GCP_CRED_CONFIG_FILE}"`)
+	assert.Contains(t, s, `export CLOUD_ML_REGION="${FULLSEND_GCP_REGION}"`)
+
+	projectIdx := strings.Index(s, `export GOOGLE_CLOUD_PROJECT="${FULLSEND_GCP_PROJECT_ID}"`)
+	runIdx := strings.Index(s, `fullsend run "${STAGE}"`)
+	require.Greater(t, projectIdx, 0, "GOOGLE_CLOUD_PROJECT export must exist")
+	require.Greater(t, runIdx, 0, "fullsend run must exist")
+	assert.Less(t, projectIdx, runIdx,
+		"GOOGLE_CLOUD_PROJECT must be exported before fullsend run is invoked")
+}
