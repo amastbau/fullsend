@@ -671,6 +671,41 @@ func TestBuildScaffoldFiles_PresetOverlayDoesNotShadowPresetRoles(t *testing.T) 
 	}
 }
 
+func TestBuildScaffoldFiles_PresetOverlayPreservesOpenAIRoute(t *testing.T) {
+	cfg := baseCfg()
+	cfg.Preset = []byte("version: \"1\"\n")
+	cfg.InferenceProvider = "openai"
+	cfg.InferenceOpenAI = config.OpenAIWIFConfig{
+		Audience: "fullsend://acme", IdentityProviderID: "idp_test", ServiceAccountID: "sa_test",
+	}
+	files, err := BuildScaffoldFiles(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlay, base []byte
+	for _, f := range files {
+		switch f.Path {
+		case ".fullsend/config.yaml":
+			overlay = f.Content
+		case ".fullsend/config.base.yaml":
+			base = f.Content
+		}
+	}
+	if len(overlay) == 0 || len(base) == 0 {
+		t.Fatal("expected both config layers")
+	}
+	effective, err := config.ParsePerRepoConfigWriterLayered(overlay, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := effective.ConfigInferenceProvider(); got != "openai" {
+		t.Errorf("provider = %q, want openai", got)
+	}
+	if got := effective.ConfigInferenceOpenAI(); got != cfg.InferenceOpenAI {
+		t.Errorf("WIF identifiers = %+v, want %+v", got, cfg.InferenceOpenAI)
+	}
+}
+
 func TestBuildScaffoldFiles_InvalidConfig(t *testing.T) {
 	cfg := baseCfg()
 	cfg.Roles = []string{"nonexistent-role"}

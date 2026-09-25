@@ -80,6 +80,10 @@ type InstallConfig struct {
 	// is set.
 	InferenceProvider string
 
+	// InferenceOpenAI preserves a committed OpenAI WIF trio when a repair
+	// regenerates config.yaml. These identifiers are not secrets.
+	InferenceOpenAI config.OpenAIWIFConfig
+
 	// VendorBinary renders scaffold workflows to reference the vendored
 	// binary path instead of fetching from upstream on each CI run.
 	VendorBinary bool
@@ -449,6 +453,12 @@ func BuildScaffoldFiles(cfg InstallConfig) ([]forge.TreeFile, error) {
 		if cfg.Runtime != "" {
 			overlay.SetRuntime(cfg.Runtime)
 		}
+		if cfg.InferenceProvider != "" {
+			overlay.SetInferenceProvider(cfg.InferenceProvider)
+		}
+		if !cfg.InferenceOpenAI.IsZero() {
+			overlay.SetInferenceOpenAI(cfg.InferenceOpenAI)
+		}
 		perRepoCfg = overlay
 	default:
 		generated := config.NewPerRepoConfig(cfg.Roles, cfg.Owner+"/"+cfg.Repo)
@@ -457,6 +467,9 @@ func BuildScaffoldFiles(cfg InstallConfig) ([]forge.TreeFile, error) {
 		}
 		if cfg.InferenceProvider != "" {
 			generated.SetInferenceProvider(cfg.InferenceProvider)
+		}
+		if !cfg.InferenceOpenAI.IsZero() {
+			generated.SetInferenceOpenAI(cfg.InferenceOpenAI)
 		}
 		perRepoCfg = generated
 	}

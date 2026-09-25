@@ -26,6 +26,9 @@ type InferenceRoute struct {
 	// OpenAIWIF is true when the committed config carries the complete
 	// inference.openai trio, which is a route on its own (no secret).
 	OpenAIWIF bool
+	// OpenAIWIFConfig preserves a committed WIF route when scaffold repair
+	// regenerates config.yaml. The identifiers are not secrets.
+	OpenAIWIFConfig config.OpenAIWIFConfig
 	// FromConfig is true when at least one config layer exists on the
 	// default branch, i.e. Provider reflects the repository rather than
 	// the code default. Converge uses the manifest's provider for a repo
@@ -80,6 +83,7 @@ func ProbeInferenceRoute(ctx context.Context, client forge.Client, owner, repo s
 		}
 	} else {
 		route.OpenAIWIF = !ids.IsZero()
+		route.OpenAIWIFConfig = ids
 	}
 	return route, nil
 }

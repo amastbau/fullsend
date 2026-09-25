@@ -4933,6 +4933,40 @@ func TestConverge_OpenAIRoute_RepairPreservesCommittedProvider(t *testing.T) {
 	}
 }
 
+func TestConverge_OpenAIRoute_RepairPreservesCommittedWIF(t *testing.T) {
+	repoNames := []string{"acme/api"}
+	fc := newFakeClientForBatch(repoNames...)
+	fc.VariableValues["acme/api/FULLSEND_MINT_URL"] = "https://mint.example.com"
+	addThinCallerFiles(fc, "acme", "api")
+	fc.FileContents["acme/api/.fullsend/config.yaml"] = []byte("version: \"1\"\ninference:\n  provider: openai\n  openai:\n    audience: fullsend://acme\n    identity_provider_id: idp_test\n    service_account_id: sa_test\n")
+	// The committed WIF trio is the only OpenAI route; there is no static key.
+	m := newConvergeManifest(repoNames...)
+	sc := &spyScaffoldCommit{}
+	cfg := ConvergeConfig{Manifest: m, MaxConcurrency: 4, Roles: []string{"triage"}, Direct: true}
+	result, err := Converge(context.Background(), cfg, newTestClientFactory(fc), sc.fn(), noopProgress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed := result.Failed(); len(failed) != 0 {
+		t.Fatalf("unexpected failures: %v", failed)
+	}
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	for _, f := range sc.files {
+		if f.Path != ".fullsend/config.yaml" {
+			continue
+		}
+		for _, want := range []string{"provider: openai", "audience: fullsend://acme", "identity_provider_id: idp_test", "service_account_id: sa_test"} {
+			if !strings.Contains(string(f.Content), want) {
+				t.Errorf("repaired config missing %q: %s", want, f.Content)
+			}
+		}
+		return
+	}
+	t.Fatal("expected repaired config.yaml")
+}
+
 func TestConverge_VertexRepair_WritesNoProvider(t *testing.T) {
 	// The vertex counterpart: a regenerated config.yaml for a vertex
 	// repository must not gain an explicit provider line.

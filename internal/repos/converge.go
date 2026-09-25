@@ -786,6 +786,7 @@ func convergeRepo(ctx context.Context,
 			InferenceProject:  cfg.InferenceProject,
 			InferenceRegion:   cfg.InferenceRegion,
 			InferenceProvider: installInferenceProvider(d),
+			InferenceOpenAI:   d.route.OpenAIWIFConfig,
 			UpstreamRef:       ref,
 			UpstreamTag:       tag,
 			WIFProvider:       wifProvider,
@@ -1760,6 +1761,7 @@ func convergeScaffoldFiles(ctx context.Context,
 		// A repair that regenerates config.yaml must not drop a
 		// committed openai route (#7481).
 		InferenceProvider: installInferenceProvider(d),
+		InferenceOpenAI:   d.route.OpenAIWIFConfig,
 	}
 
 	// When vendored, the running binary's embedded templates match the
